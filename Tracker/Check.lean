@@ -78,15 +78,8 @@ def resolveDecl (roots : Array Name) (tracked : Std.HashMap Name Node)
       axiomsOk := axioms.all fun a => standardAxioms.contains a
       uses, signature := sig, doc }
 
-/-- Best-effort short commit hash of the project. -/
-def gitCommit (root : System.FilePath) : IO String := do
-  try
-    let out ← IO.Process.output { cmd := "git", args := #["rev-parse", "--short", "HEAD"], cwd := some root }
-    return if out.exitCode == 0 then String.ofList (out.stdout.toList.takeWhile Char.isAlphanum) else ""
-  catch _ => return ""
-
 /-- Import the project and check every node. -/
-unsafe def runCheck (root : System.FilePath) (plan : Plan) (roots : Array Name)
+unsafe def runCheck (plan : Plan) (roots : Array Name)
     (loadExts : Bool) (previous : Option Cache) : IO Cache := do
   initSearchPath (← findSysroot)
   enableInitializersExecution
@@ -105,8 +98,15 @@ unsafe def runCheck (root : System.FilePath) (plan : Plan) (roots : Array Name)
     decls := decls.push d
   let t2 ← IO.monoMsNow
   IO.eprintln s!"resolved {ids.size} ids in {t2 - t1} ms"
+  -- the project's modules, fingerprinted, so that later commands can tell when the build changed
+  let mut modules : Array ModuleRec := #[]
+  for m in env.allImportedModuleNames do
+    if isProjectModule roots m then
+      let olean ← findOLean m
+      modules := modules.push {
+        module := m, olean := olean.toString, hash := (← oleanFingerprint olean).getD "" }
   -- states, and regressions against the previous cache
-  let cache : Cache := { commit := ← gitCommit root, roots, decls }
+  let cache : Cache := { roots, loadExts, planHash := plan.hash, modules, decls }
   let view := mkView plan (some cache)
   let states := ids.map fun id => ({ id, state := (view.state id).toString } : StateRec)
   let prev : Std.HashMap Name String := match previous with

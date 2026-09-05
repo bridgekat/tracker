@@ -20,7 +20,7 @@ git = "https://github.com/bridgekat/tracker"
 ```
 lake build                 # the tracker reads oleans, so build first
 lake exe tracker check     # import the project, resolve every id, write the cache
-lake exe tracker status
+lake exe tracker status    # every command does the same first when the cache is stale
 ```
 
 The built executable also runs without the `require`, from the project root, as
@@ -41,9 +41,9 @@ lake exe tracker lint
 ### Usage
 
 ```
-tracker [--root DIR] [--dir DIR] <command> [args]
+tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <command> [args]
 
-check [--roots A,B] [--no-exts]   import the project, resolve every id, write the cache
+check [--force]                   make the cache fresh: import the project, resolve every id
 status [group] [--json]           counts per group, rolled up through parents; regressions
 ready [--kind K | --all] [--json] groups whose outside dependencies are all proved
 show <group | id>                 the brief for a group, or everything about one node
@@ -52,14 +52,20 @@ graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
 ```
 
 `--root` is the project root (default `.`); `--dir` is the directory of plan files (default
-`<root>/tracker`). `check` imports the `lean_lib` roots of the project's `lakefile.toml` unless
+`<root>/tracker`). A check imports the `lean_lib` roots of the project's `lakefile.toml` unless
 `--roots` says otherwise, and runs the imported modules' initializers so that printed signatures
-carry their notation; `--no-exts` skips that. `show` takes a group name, a full id, or an
-unambiguous suffix of one. `lint` exits non-zero on errors, and `check` refuses to run while the
-plan has any.
+carry their notation; `--no-exts` skips that. A group is named by its path under the plan
+directory, `numbers/odd`, or by an unambiguous trailing part of it, `odd`; `show` also takes a
+node id, in full or by an unambiguous suffix. `lint` exits non-zero on errors, and no check runs
+while the plan has any.
 
 The cache is `<root>/.lake/tracker/check.json`. It is never committed, and the tracker never
-edits plan files.
+edits plan files. Every command checks first when the cache is stale: when the plan, the
+project's compiled modules, the root modules, the options, or the cache format changed since it
+was written, all judged by content hashes and never by timestamps. `check` is that step alone,
+and does nothing unless the cache is stale or `--force` is given; `--no-check` answers from the
+cache as it is. The tracker reads oleans and never builds, so an edit that has not been built is
+invisible to it: build first.
 
 ### Exports
 
@@ -74,8 +80,9 @@ three arrays:
 | `edges` | `from`, `to`, `real`, `suggested` |
 
 An edge means `from` depends on `to`; `real` is set when the dependency was read from the proof,
-`suggested` when it was written in the plan, and both can be set. The DOT form has one cluster
-per group, nodes filled by state, real edges solid and suggested edges dashed:
+`suggested` when it was written in the plan, and both can be set. A group's `parent` is the group
+whose directory holds it. The DOT form has one cluster per group, nodes filled by state, real
+edges solid and suggested edges dashed:
 
 ```
 lake exe tracker graph --dot --under numbers | dot -Tsvg -o numbers.svg
@@ -131,7 +138,8 @@ renamed or broken declaration shows up.
 
 A group is a set of nodes in one file. Its kind says what it is for: a `task` handed to one
 sub-agent, a `section` or `chapter` of a book, a `module`, or any other word; the tracker treats
-every kind alike, and `ready` lists tasks unless told otherwise. Groups nest through `parent`,
+every kind alike, and `ready` lists tasks unless told otherwise. Groups nest through
+directories: the children of `numbers` are the group files in `numbers/`, beside `numbers.toml`,
 and counts roll up. A group is *done* when every node in it and under it is proved, and *ready*
 when it is not done and every dependency of its nodes that lies outside it is proved.
 
@@ -141,12 +149,14 @@ landed in the wrong file is reported without anyone looking for it.
 
 ## Plan files
 
-One TOML file per group, in the plan directory. The file stem is the group's name.
+One TOML file per group, under the plan directory. The group's name is the file's path from
+there without `.toml`: `numbers/odd.toml` is the group `numbers/odd`, a child of `numbers.toml`.
+A directory holds the children of the group file of the same name beside it, and must have one.
 
 ```toml
+# tracker/numbers/odd.toml
 kind = "task"                          # default "task"
 title = "Odd numbers"                  # default: the file stem
-parent = "numbers"                     # optional
 module = "Example.Odd"                 # optional
 namespace = "Example"                  # ids below are relative to this; optional
 notes = '''

@@ -2,7 +2,6 @@
 # Every outside dependency is proved, so `tracker ready` lists it.
 kind = "task"
 title = "Odd numbers"
-parent = "numbers"
 module = "Example.Odd"
 namespace = "Example"
 notes = '''

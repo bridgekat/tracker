@@ -28,7 +28,8 @@ private def firstLine (s : String) : String :=
 partial def groupOrder (v : View) (from? : Option String := none) : Array (String × Nat) := Id.run do
   let roots : Array String := match from? with
     | some g => #[g]
-    | none => v.plan.groups.filterMap fun (g : Group) => if g.parent.isNone then some g.name else none
+    | none => v.plan.groups.filterMap fun (g : Group) =>
+        if (v.plan.parent? g.name).isNone then some g.name else none
   let mut out := #[]
   let mut stack : List (String × Nat) := roots.toList.map (·, 0)
   while true do
@@ -42,9 +43,25 @@ partial def groupOrder (v : View) (from? : Option String := none) : Array (Strin
 
 def noCacheWarning (v : View) : IO Unit := do
   if v.cache.isNone then
-    IO.eprintln "warning: no check cache; every node reads as open. Run `tracker check` first."
+    IO.eprintln "warning: no cache; every node reads as open"
 
 def isBlank (s : String) : Bool := s.all Char.isWhitespace
+
+/--
+A group by its name, or by an unambiguous trailing part of it: `odd` for `numbers/odd`. Says
+why when nothing matches or several do.
+-/
+def resolveGroup (v : View) (target : String) : IO (Option String) := do
+  if v.plan.groupIdx.contains target then return some target
+  let hits := v.plan.groups.filterMap fun g =>
+    if g.name.endsWith ("/" ++ target) then some g.name else none
+  match hits with
+  | #[g] => return some g
+  | #[] => IO.eprintln s!"no group named '{target}'"; return none
+  | _ =>
+    IO.eprintln s!"'{target}' is ambiguous:"
+    for g in hits do IO.eprintln s!"  {g}"
+    return none
 
 -- ## status
 
@@ -53,37 +70,36 @@ def groupJson (v : View) (name : String) : Json :=
   let g := v.plan.group? name
   Json.mkObj [
     ("group", name), ("kind", toJson (g.map (·.kind))), ("title", toJson (g.map (·.title))),
-    ("parent", toJson (g.bind (·.parent))),
+    ("parent", toJson (v.plan.parent? name)),
     ("proved", c.proved), ("stated", c.stated), ("open", c.open), ("axioms", c.axioms),
     ("wrong", c.wrong), ("done", v.groupDone name), ("ready", v.groupReady name)]
 
 def status (v : View) (group? : Option String) (json : Bool) : IO UInt32 := do
+  let mut from? : Option String := none
   if let some g := group? then
-    unless v.plan.groupIdx.contains g do
-      IO.eprintln s!"no group named '{g}'"
-      return 1
-  let rows := groupOrder v group?
+    let some r ← resolveGroup v g | return 1
+    from? := some r
+  let rows := groupOrder v from?
   if json then
     let groups := rows.map fun (g, _) => groupJson v g
     let regs := (v.cache.map (·.regressions)).getD #[]
-    IO.println (Json.mkObj [
-      ("commit", toJson (v.cache.map (·.commit))),
-      ("groups", toJson groups), ("regressions", toJson regs)]).pretty
+    IO.println (Json.mkObj [("groups", toJson groups), ("regressions", toJson regs)]).pretty
     return 0
   noCacheWarning v
-  if let some c := v.cache then
-    if !c.commit.isEmpty then IO.println s!"checked at {c.commit}"
   IO.println s!"{pad "group" 34} {pad "kind" 9} {pad "proved" 7} {pad "stated" 7} {pad "open" 6} {pad "wrong" 6} {pad "axioms" 7} state"
   for (g, depth) in rows do
     let c := v.counts g
     let kind := (v.plan.group? g).map (·.kind) |>.getD ""
     let st := if v.groupDone g then "done" else if v.groupReady g then "ready" else if c.total == 0 then "" else "blocked"
-    let name := "".pushn ' ' (2 * depth) ++ g
+    -- the top row in full, the rows under it by the last component: the indentation says the rest
+    let name := if depth == 0 then g else "".pushn ' ' (2 * depth) ++ groupStem g
     IO.println s!"{pad name 34} {pad kind 9} {pad (toString c.proved) 7} {pad (toString c.stated) 7} {pad (toString c.open) 6} {pad (toString c.wrong) 6} {pad (toString c.axioms) 7} {st}"
   -- wrong nodes and regressions
   let wrongs := v.plan.nodes.toArray.filterMap fun (_, n) =>
     if let some w := n.wrong then some (n, w) else none
-  let wrongs := wrongs.filter fun (n, _) => group?.isNone || (v.subtree group?.get!).contains n.group
+  let wrongs := wrongs.filter fun (n, _) => match from? with
+    | some f => (v.subtree f).contains n.group
+    | none => true
   if !wrongs.isEmpty then
     IO.println "\nwrong:"
     for (n, w) in wrongs.qsort (·.1.id.toString < ·.1.id.toString) do
@@ -168,7 +184,6 @@ def showGroup (v : View) (g : Group) : IO Unit := do
   IO.println s!"{g.name}  [{g.kind}] {g.title}"
   if let some m := g.module then IO.println s!"  module: {m}"
   if let some ns := g.namespace then IO.println s!"  namespace: {ns}"
-  if let some p := g.parent then IO.println s!"  parent: {p}"
   IO.println s!"  {c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms; {if v.groupDone g.name then "done" else if v.groupReady g.name then "ready" else "blocked"}"
   if let some notes := g.notes then
     IO.println "\nnotes:"
@@ -199,15 +214,17 @@ def «show» (v : View) (target : String) : IO UInt32 := do
   if let some n := v.plan.node? id then
     showNode v n
     return 0
-  -- try as a suffix: any node whose id ends with the target
-  let hits := v.plan.nodes.toArray.filter fun (k, _) =>
-    k == id || (k.toString.endsWith ("." ++ target))
-  match hits with
-  | #[(_, n)] => showNode v n; return 0
-  | #[] => IO.eprintln s!"no group or node named '{target}'"; return 1
-  | ms =>
+  -- a trailing part: of a group name (`odd` for `numbers/odd`) or of a node id
+  let groups := v.plan.groups.filter fun g => g.name.endsWith ("/" ++ target)
+  let nodes := v.plan.nodes.toArray.filter fun (k, _) => k.toString.endsWith ("." ++ target)
+  match groups, nodes with
+  | #[g], #[] => showGroup v g; return 0
+  | #[], #[(_, n)] => showNode v n; return 0
+  | #[], #[] => IO.eprintln s!"no group or node named '{target}'"; return 1
+  | _, _ =>
     IO.eprintln s!"'{target}' is ambiguous:"
-    for (k, _) in ms do IO.eprintln s!"  {k}"
+    for g in groups do IO.eprintln s!"  {g.name}"
+    for (k, _) in nodes do IO.eprintln s!"  {k}"
     return 1
 
 -- ## lint
@@ -284,7 +301,8 @@ def graphJson (v : View) (under? : Option String) : Json :=
       ("from", id.toString), ("to", d.toString),
       ("real", real.contains d), ("suggested", sugg.contains d)]
   let groupJson := groups.filterMap fun g => (v.plan.group? g).map fun g => Json.mkObj [
-    ("name", g.name), ("kind", g.kind), ("title", g.title), ("parent", toJson g.parent),
+    ("name", g.name), ("kind", g.kind), ("title", g.title),
+    ("parent", toJson (v.plan.parent? g.name)),
     ("module", toJson (g.module.map (·.toString))),
     ("done", v.groupDone g.name), ("ready", v.groupReady g.name)]
   Json.mkObj [("groups", toJson groupJson), ("nodes", toJson nodeJson), ("edges", toJson edges)]
@@ -320,12 +338,12 @@ def graphDot (v : View) (under? : Option String) : String := Id.run do
   return out
 
 def graph (v : View) (under? : Option String) (dot : Bool) : IO UInt32 := do
+  let mut under : Option String := none
   if let some g := under? then
-    unless v.plan.groupIdx.contains g do
-      IO.eprintln s!"no group named '{g}'"
-      return 1
-  if dot then IO.print (graphDot v under?)
-  else IO.println (graphJson v under?).pretty
+    let some r ← resolveGroup v g | return 1
+    under := some r
+  if dot then IO.print (graphDot v under)
+  else IO.println (graphJson v under).pretty
   return 0
 
 end Tracker

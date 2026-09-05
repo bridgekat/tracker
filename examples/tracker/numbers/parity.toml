@@ -2,7 +2,6 @@
 # keep only their id. One declaration has no doc comment and keeps its description.
 kind = "module"
 title = "Parity"
-parent = "numbers"
 module = "Example.Parity"
 namespace = "Example"
 

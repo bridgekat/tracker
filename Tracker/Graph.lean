@@ -24,7 +24,7 @@ structure View where
   eff : Std.HashMap Name (Array Name) := {}
   /-- Reverse of `eff`. -/
   dependents : Std.HashMap Name (Array Name) := {}
-  /-- Groups by parent. -/
+  /-- Groups by the group whose directory holds them. -/
   children : Std.HashMap String (Array String) := {}
 
 /-- The state of a node given what the cache knows about it. -/
@@ -66,7 +66,7 @@ def mkView (plan : Plan) (cache : Option Cache) : View := Id.run do
     for d in deps do
       v := { v with dependents := v.dependents.insert d ((v.dependents.getD d #[]).push id) }
   for g in plan.groups do
-    if let some p := g.parent then
+    if let some p := plan.parent? g.name then
       v := { v with children := v.children.insert p ((v.children.getD p #[]).push g.name) }
   return v
 

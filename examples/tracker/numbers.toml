@@ -1,4 +1,4 @@
-# A chapter is a group with no nodes of its own; its sections name it as parent and its status
-# is the roll-up of theirs.
+# A chapter is a group with no nodes of its own; its sections are the group files in `numbers/`,
+# and its status is the roll-up of theirs.
 kind = "chapter"
 title = "Natural numbers"

@@ -4,9 +4,9 @@ import Tracker.Toml
 /-!
 # Loading the plan
 
-Read every `*.toml` file in the tracker directory as a group, resolve node ids and suggested
-dependencies, and index everything. Errors are collected, not thrown, so that one bad file does
-not hide the others.
+Read every `*.toml` file under the tracker directory as a group named by its path there,
+resolve node ids and suggested dependencies, and index everything. Errors are collected, not
+thrown, so that one bad file does not hide the others.
 -/
 
 open Lean
@@ -50,8 +50,7 @@ open Toml in
 private def decodeGroup (name : String) (path : System.FilePath) (ictx : Parser.InputContext)
     (t : Lake.Toml.Table) : Lake.Toml.EDecodeM Group := do
   let kind := (← str? t `kind).getD "task"
-  let title := (← str? t `title).getD name
-  let parent ← str? t `parent
+  let title := (← str? t `title).getD (groupStem name)
   let module ← name? t `module
   let ns ← name? t `namespace
   let notes ← str? t `notes
@@ -60,28 +59,41 @@ private def decodeGroup (name : String) (path : System.FilePath) (ictx : Parser.
   for (nt, ref) in ← tables t `node do
     if let some n ← recover (decodeNode name ns ictx nt ref) then
       nodes := nodes.push n
-  return { name, kind, title, parent, module, «namespace» := ns, notes, nodes, path }
+  return { name, kind, title, module, «namespace» := ns, notes, nodes, path }
 
 /-- Load one group file: its errors, and the group if it could be decoded at all. -/
-def loadGroup (path : System.FilePath) : IO (Array String × Option Group) := do
-  let name := path.fileStem.getD path.toString
+def loadGroup (name : String) (path : System.FilePath) : IO (Array String × Option Group) := do
   match ← Toml.load path with
   | .error e => return (#[s!"{path}:{e}"], none)
   | .ok l =>
     let (errs, g?) := Toml.run l.ictx (decodeGroup name path l.ictx l.table)
     return (errs.map fun e => s!"{path}:{e}", g?)
 
-/-- Load every group in a directory and resolve dependencies. -/
+/--
+The group files under `dir` as (name, path): the `.toml` files of a directory, then those of its
+subdirectories, each in sorted order, so that a group comes before its children.
+-/
+partial def groupFiles (dir : System.FilePath) (base : String := "") :
+    IO (Array (String × System.FilePath)) := do
+  let entries := (← dir.readDir).qsort (·.fileName < ·.fileName)
+  let mut out := #[]
+  for e in entries do
+    if e.path.extension == some "toml" && !(← e.path.isDir) then
+      out := out.push (base ++ e.path.fileStem.getD e.fileName, e.path)
+  for e in entries do
+    if ← e.path.isDir then
+      out := out ++ (← groupFiles e.path (base ++ e.fileName ++ "/"))
+  return out
+
+/-- Load every group under a directory and resolve dependencies. -/
 def loadPlan (dir : System.FilePath) : IO Plan := do
   unless ← dir.isDir do
     throw <| IO.userError s!"no tracker directory at {dir}"
-  let entries ← dir.readDir
-  let files := entries.filterMap fun e =>
-    if e.path.extension == some "toml" then some e.path else none
-  let files := files.qsort (·.toString < ·.toString)
   let mut plan : Plan := {}
-  for f in files do
-    let (errs, g?) ← loadGroup f
+  let mut h : UInt64 := 0
+  for (name, f) in ← groupFiles dir do
+    h := mixHash h (mixHash name.hash (← IO.FS.readFile f).hash)
+    let (errs, g?) ← loadGroup name f
     plan := { plan with errors := plan.errors ++ errs }
     if let some g := g? then
       plan := { plan with
@@ -120,13 +132,20 @@ def loadPlan (dir : System.FilePath) : IO Plan := do
     for n in g.nodes do
       if !nodeMap.contains n.id then nodeMap := nodeMap.insert n.id n
   plan := { plan with nodes := nodeMap }
-  -- parents must exist
+  -- a directory holds the children of the group file beside it, which must exist
+  let mut missing : Array String := #[]
   for g in plan.groups do
-    if let some p := g.parent then
-      unless plan.groupIdx.contains p do
-        let m := s!"{g.path}: parent group '{p}' does not exist"
-        plan := { plan with errors := plan.errors.push m }
-  return plan
+    let mut above := groupEnclosing? g.name
+    while true do
+      match above with
+      | none => break
+      | some p =>
+        if !plan.groupIdx.contains p && !missing.contains p then missing := missing.push p
+        above := groupEnclosing? p
+  for p in missing.qsort (· < ·) do
+    let m := s!"{dir / System.FilePath.mk p}: directory has no group file {p}.toml beside it"
+    plan := { plan with errors := plan.errors.push m }
+  return { plan with hash := hex h }
 
 /-- Display an id relative to its group's namespace. -/
 def Plan.shortId (p : Plan) (n : Node) : String :=

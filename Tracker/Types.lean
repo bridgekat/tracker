@@ -11,6 +11,9 @@ open Lean
 
 namespace Tracker
 
+/-- A 64-bit hash as hex, the form Lake's `.olean.hash` files use. -/
+def hex (h : UInt64) : String := String.ofList (Nat.toDigits 16 h.toNat)
+
 /-- A node is a definition or a theorem. -/
 inductive NodeKind where
   | definition
@@ -58,12 +61,13 @@ structure Node where
 
 /-- One group file. -/
 structure Group where
-  /-- The file stem; how the group is referred to everywhere. -/
+  /-- The file's path under the plan directory without `.toml`, with `/` between components:
+  `numbers/odd` for `numbers/odd.toml`. How the group is referred to everywhere. The directory
+  of the same name beside the file holds the group's children. -/
   name : String
   /-- `task`, `section`, `chapter`, `module`, or any other word. -/
   kind : String := "task"
   title : String := ""
-  parent : Option String := none
   /-- The module the group's declarations should live in. -/
   module : Option Name := none
   /-- Ids inside the group are resolved relative to this namespace. -/
@@ -79,11 +83,26 @@ structure Plan where
   nodes : Std.HashMap Name Node := {}
   groupIdx : Std.HashMap String Nat := {}
   errors : Array String := #[]
+  /-- A hash of every group file's name and content, by which a cache knows it is stale. -/
+  hash : String := ""
 
 def Plan.group? (p : Plan) (name : String) : Option Group :=
   p.groupIdx[name]? >>= fun i => p.groups[i]?
 
 def Plan.node? (p : Plan) (id : Name) : Option Node := p.nodes[id]?
+
+/-- The last component of a group name: `odd` for `numbers/odd`. -/
+def groupStem (name : String) : String := (name.splitOn "/").getLastD name
+
+/-- The name of the directory a group file sits in: `numbers` for `numbers/odd`, none at the top. -/
+def groupEnclosing? (name : String) : Option String :=
+  match (name.splitOn "/").dropLast with
+  | [] => none
+  | parts => some (String.intercalate "/" parts)
+
+/-- The group whose directory holds `name`, when its file exists: `numbers` for `numbers/odd`. -/
+def Plan.parent? (p : Plan) (name : String) : Option String :=
+  (groupEnclosing? name).filter p.groupIdx.contains
 
 /-- The state of a node, derived from the compiled library except for `wrong`. -/
 inductive NodeState where
@@ -157,11 +176,26 @@ structure Regression where
   after : String
   deriving ToJson, FromJson, Inhabited
 
+/-- Bumped whenever the cache's meaning changes; a cache of another version is stale. -/
+def cacheVersion : Nat := 2
+
+/-- One compiled module of the project, fingerprinted at check time. -/
+structure ModuleRec where
+  module : Name
+  /-- The olean the module was read from. -/
+  olean : String
+  /-- Its fingerprint: Lake's `.olean.hash` beside it, else a hash of the file. -/
+  hash : String
+  deriving ToJson, FromJson, Inhabited
+
 /-- The check cache, `.lake/tracker/check.json` under the project root. -/
 structure Cache where
-  version : Nat := 1
-  commit : String := ""
+  version : Nat := cacheVersion
   roots : Array Name := #[]
+  loadExts : Bool := true
+  /-- `Plan.hash` of the plan the check ran against. -/
+  planHash : String := ""
+  modules : Array ModuleRec := #[]
   decls : Array DeclInfo := #[]
   states : Array StateRec := #[]
   regressions : Array Regression := #[]
