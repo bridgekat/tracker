@@ -43,6 +43,17 @@ def posOf (ictx : Parser.InputContext) (ref : Syntax) : String :=
 def fail (ref : Syntax) (msg : String) : EDecodeM α :=
   fun errs => .error () (errs.push { ref, msg })
 
+/-- Record an error and go on. -/
+def report (ref : Syntax) (msg : String) : EDecodeM Unit :=
+  fun errs => .ok () (errs.push { ref, msg })
+
+/-- An error for every key of the table that is not a known one, at the key's value. -/
+def unknownKeys (t : Table) (known : List Name) (hint : String) : EDecodeM Unit := do
+  for k in t.keys do
+    unless known.contains k do
+      let ref := ((t.find? k).map (·.ref)).getD Syntax.missing
+      report ref s!"unknown key '{k}' ({hint})"
+
 /-- Run a decoder, keeping its errors but continuing with `none` on failure. -/
 def recover (x : EDecodeM α) : EDecodeM (Option α) := fun s =>
   match x s with

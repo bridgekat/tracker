@@ -31,6 +31,8 @@ open Toml in
 private def decodeNode (group : String) (ns : Option Name) (ictx : Parser.InputContext)
     (nt : Lake.Toml.Table) (ref : Syntax) : Lake.Toml.EDecodeM Node := do
   let rawId ← str nt `id ref
+  unknownKeys nt [`id, `kind, `desc, `description, `deps, `source, `wrong]
+    s!"node {rawId} has id, kind, desc, deps, source and wrong"
   let kind ← match ← str? nt `kind with
     | none => pure none
     | some kindS => match NodeKind.parse? kindS with
@@ -49,6 +51,8 @@ private def decodeNode (group : String) (ns : Option Name) (ictx : Parser.InputC
 open Toml in
 private def decodeGroup (name : String) (path : System.FilePath) (ictx : Parser.InputContext)
     (t : Lake.Toml.Table) : Lake.Toml.EDecodeM Group := do
+  unknownKeys t [`namespace, `desc, `description, `node]
+    "a group file has namespace, desc and [[node]] tables"
   let ns ← name? t `namespace
   let desc ← match ← str? t `desc with
     | some d => pure (some d)

@@ -182,7 +182,8 @@ needs, when a planned kind disagrees with the declaration, and when an attached 
 has neither a `desc` nor a doc comment. Ids resolve like Lean names: relative to the group's
 `namespace` if it has one, otherwise as written, and `_root_.` forces an absolute name. A dependency may name a node of any group,
 relative first and then absolute, and must name a tracked node. `def`, `thm` and `lemma` are
-accepted for `kind`, and `description` for `desc`.
+accepted for `kind`, and `description` for `desc`. Any other key is an error, so a misspelt
+field or one from an older plan cannot pass unnoticed.
 
 Write descriptions as literal strings (`'…'` or `'''…'''`), so that `\` and `"` need no
 escaping. A new node is a block appended after a blank line, which is why the files merge
