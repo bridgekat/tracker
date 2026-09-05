@@ -1,0 +1,10 @@
+name = "tracker"
+version = "0.1.0"
+defaultTargets = ["tracker"]
+
+[[lean_lib]]
+name = "Tracker"
+
+[[lean_exe]]
+name = "tracker"
+root = "Main"
