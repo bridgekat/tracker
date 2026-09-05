@@ -7,14 +7,21 @@ ready to work on, what a task depends on, and what changed since last time.
 
 ## Get started
 
-The tracker reads the project's `.olean` files, so it must build on the project's toolchain
-(`lean-toolchain` here is the version it is currently pinned to). Add it to the project's
-`lakefile.toml` and run it with `lake exe`, which gives it the project's search path:
+The tracker reads the project's `.olean` files, so it must build on the project's toolchain.
+Keep it inside the project as a git submodule, so that this README is in the tree for the agents
+that use the tool, at a version pinned with the rest of the project:
+
+```
+git submodule add https://github.com/bridgekat/tracker tools/tracker
+```
+
+Then add it to the project's `lakefile.toml` and run it with `lake exe`, which builds it on
+demand and gives it the project's search path:
 
 ```toml
 [[require]]
 name = "tracker"
-git = "https://github.com/bridgekat/tracker"
+path = "tools/tracker"
 ```
 
 ```
@@ -23,7 +30,11 @@ lake exe tracker check     # import the project, resolve every id, write the cac
 lake exe tracker status    # every command does the same first when the cache is stale
 ```
 
-The built executable also runs without the `require`, from the project root, as
+Any directory but `tracker/` will do for the submodule, since that is where the plan lives.
+Tell the agents where the README is: one line in the project's instructions file, saying to
+read `tools/tracker/README.md` before touching the plan. A `git = "…"` require works as well,
+and Lake then keeps the clone, README included, under `.lake/packages/tracker/`; and a clone
+anywhere, once built, runs without any `require` from the project root as
 `lake env path/to/tracker/.lake/build/bin/tracker …`. Either way it needs the toolchain's `bin`
 on the path, because it links Lean's shared library.
 
