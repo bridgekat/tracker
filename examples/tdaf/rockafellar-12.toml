@@ -6,41 +6,24 @@ namespace = "Rockafellar"
 
 [[node]]
 id = "theorem_12_1"
-kind = "theorem"
-desc = 'A closed convex function is the pointwise supremum of the affine functions below it.'
 source = "Rockafellar, Theorem 12.1"
 
 [[node]]
 id = "theorem_12_2_convex"
-kind = "theorem"
-desc = 'The conjugate of any function on ℝⁿ is convex.'
 source = "Rockafellar, Theorem 12.2"
-deps = ["Tdaf.ConvexAnalysis.conj"]
 
 [[node]]
 id = "theorem_12_2_closed"
-kind = "theorem"
-desc = 'The conjugate of any function on ℝⁿ is closed.'
 source = "Rockafellar, Theorem 12.2"
-deps = ["Tdaf.ConvexAnalysis.conj"]
 
 [[node]]
 id = "theorem_12_2_proper"
-kind = "theorem"
-desc = 'For convex f, the conjugate f* is proper iff f is proper.'
 source = "Rockafellar, Theorem 12.2"
-deps = ["Tdaf.ConvexAnalysis.conj"]
 
 [[node]]
 id = "theorem_12_2_conj_clFn"
-kind = "theorem"
-desc = '(cl f)* = f*.'
 source = "Rockafellar, Theorem 12.2"
-deps = ["Tdaf.ConvexAnalysis.conj", "Tdaf.ConvexAnalysis.clFn"]
 
 [[node]]
 id = "theorem_12_2_biconj"
-kind = "theorem"
-desc = 'For convex f on ℝⁿ, f** = cl f.'
 source = "Rockafellar, Theorem 12.2"
-deps = ["Tdaf.ConvexAnalysis.biconj_eq_clFn"]

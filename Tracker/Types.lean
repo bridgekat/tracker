@@ -36,9 +36,10 @@ end NodeKind
 structure Node where
   /-- The fully qualified Lean identifier the declaration has or will have. -/
   id : Name
-  kind : NodeKind
-  /-- The natural-language statement. -/
-  desc : String
+  /-- Definition or theorem, until the declaration exists and says so itself. -/
+  kind : Option NodeKind := none
+  /-- The natural-language statement, until the declaration has a doc comment. -/
+  desc : Option String := none
   /-- Suggested dependencies, resolved to node ids. -/
   deps : Array Name := #[]
   /-- Where the statement comes from, e.g. `Rockafellar, Theorem 12.2`. -/
@@ -141,6 +142,8 @@ structure DeclInfo where
   /-- Tracked ids reachable from the declaration through untracked project constants. -/
   uses : Array Name := #[]
   signature : String := ""
+  /-- The declaration's doc comment, which supersedes the plan's `desc`. -/
+  doc : Option String := none
   deriving ToJson, FromJson, Inhabited
 
 structure StateRec where

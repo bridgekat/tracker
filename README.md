@@ -1,81 +1,108 @@
 # tracker
 
-A progress tracker for Lean formalization projects. It keeps a plan of definitions and theorems
-as small TOML files, computes how far the plan has got from the compiled library, and answers the
-questions an orchestrator and its sub-agents ask: what is proved, what is ready to work on, what a
-task depends on, and what changed.
+A progress tracker for Lean formalization projects. The plan is a set of small TOML files naming
+the definitions and theorems that should exist; the progress is read from the compiled library.
+The tracker answers the questions an orchestrator and its sub-agents ask: what is proved, what is
+ready to work on, what a task depends on, and what changed since last time.
 
-Nothing about progress is written by hand. A node is named by the Lean identifier it has or will
-have; once that identifier exists, its state (stated with `sorry`, proved, or depending on a
-non-standard axiom) and its real dependencies are read from the environment. Before it exists,
-hand-written suggestions stand in.
+## Get started
 
-## Using it in a project
-
-Add the tracker to the project's `lakefile.toml` and run it with `lake exe`, so that it inherits
-the project's search path and can import the project's modules:
+The tracker reads the project's `.olean` files, so it must build on the project's toolchain
+(`lean-toolchain` here is the version it is currently pinned to). Add it to the project's
+`lakefile.toml` and run it with `lake exe`, which gives it the project's search path:
 
 ```toml
 [[require]]
 name = "tracker"
-path = "../tracker"        # or git = "…"
+git = "https://github.com/bridgekat/tracker"
 ```
 
 ```
-lake build                 # the tracker reads .olean files, so build first
+lake build                 # the tracker reads oleans, so build first
 lake exe tracker check     # import the project, resolve every id, write the cache
-lake exe tracker status    # counts per group, rolled up through parents
-lake exe tracker ready     # tasks whose outside dependencies are all proved
-lake exe tracker show <group | id>
-lake exe tracker lint
-lake exe tracker graph [--dot]
+lake exe tracker status
 ```
 
-Without the `require`, the built executable also runs under `lake env` from the project root:
-`lake env path/to/tracker/.lake/build/bin/tracker check`. It links against Lean's shared library,
-so it needs the toolchain's `bin` on the path either way.
+The built executable also runs without the `require`, from the project root, as
+`lake env path/to/tracker/.lake/build/bin/tracker …`. Either way it needs the toolchain's `bin`
+on the path, because it links Lean's shared library.
 
-Group files live in `<project>/tracker/` by default (`--dir` overrides). The cache is written to
-`<project>/.lake/tracker/check.json` and is never committed. The tracker never edits group files.
+### Usage
 
-Options: `--root DIR` (project root, default `.`), `--dir DIR` (group files), `--roots A,B`
-(modules to import for `check`; default: the `lean_lib` names in `lakefile.toml`), `--no-exts`
-(skip running the imported modules' initializers), `--json` on `status` and `ready`, `--kind K`
-or `--all` on `ready`, `--under G` on `graph`.
+```
+tracker [--root DIR] [--dir DIR] <command> [args]
 
-## Group files
-
-One TOML file per group. A group is a set of nodes: a `task` handed to one sub-agent, a `section`
-or `chapter` of a book, a `module`, or any other word; the tracker treats every kind alike. A
-group is *done* when all its nodes are proved and *ready* when every dependency of its nodes
-outside the group is proved. Groups nest through `parent`, and status rolls up.
-
-```toml
-kind = "task"                                   # default "task"
-title = "Conjugates of improper functions"
-parent = "duality"                              # optional
-module = "Tdaf.Analysis.Convex.Duality.Improper"  # where the declarations should live; optional
-namespace = "Tdaf.ConvexAnalysis"               # ids below are relative to this; optional
-notes = '''
-Anything a sub-agent should read before starting.
-'''
-
-[[node]]
-id = "conj_eq_top_of_exists_eq_bot"             # the Lean identifier, relative to namespace
-kind = "theorem"                                # definition | theorem
-desc = 'If f takes the value -∞ anywhere, then f* is identically +∞.'
-deps = ["conj", "conj_bot"]                     # suggested dependencies, by id
-source = "Rockafellar, §12"                     # optional
-# wrong = 'why the statement is false or unprovable as stated'   # optional, hand-set
+check [--roots A,B] [--no-exts]   import the project, resolve every id, write the cache
+status [group] [--json]           counts per group, rolled up through parents; regressions
+ready [--kind K | --all] [--json] groups whose outside dependencies are all proved
+show <group | id>                 the brief for a group, or everything about one node
+lint                              plan errors, cycles, placement and kind mismatches, superseded fields
+graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
 ```
 
-Ids resolve like Lean names: relative to the group's `namespace` if it has one, else as written;
-`_root_.` forces an absolute name. A dependency may name a node of any group; relative first,
-then absolute.
+`--root` is the project root (default `.`); `--dir` is the directory of plan files (default
+`<root>/tracker`). `check` imports the `lean_lib` roots of the project's `lakefile.toml` unless
+`--roots` says otherwise, and runs the imported modules' initializers so that printed signatures
+carry their notation; `--no-exts` skips that. `show` takes a group name, a full id, or an
+unambiguous suffix of one. `lint` exits non-zero on errors, and `check` refuses to run while the
+plan has any.
 
-Use literal strings (`'…'`) for descriptions, so that `\` and `"` need no escaping.
+The cache is `<root>/.lake/tracker/check.json`. It is never committed, and the tracker never
+edits plan files.
 
-## States
+### Exports
+
+`graph` is the contract for anything that wants a picture; the tracker itself does not draw.
+`--under G` restricts the output to a group and its descendants. The JSON is one object with
+three arrays:
+
+| array | fields |
+|---|---|
+| `groups` | `name`, `kind`, `title`, `parent`, `module`, `done`, `ready` |
+| `nodes` | `id`, `group`, `kind`, `state`, `desc`, `source`, `wrong` |
+| `edges` | `from`, `to`, `real`, `suggested` |
+
+An edge means `from` depends on `to`; `real` is set when the dependency was read from the proof,
+`suggested` when it was written in the plan, and both can be set. The DOT form has one cluster
+per group, nodes filled by state, real edges solid and suggested edges dashed:
+
+```
+lake exe tracker graph --dot --under rockafellar-part3 | dot -Tsvg -o part3.svg
+```
+
+## Plan graph
+
+### Nodes
+
+A node is a definition or a theorem. It is named by the fully qualified Lean identifier the
+declaration has or will have, and described in natural language. The node is *attached* once
+that identifier resolves in the compiled environment; until then it is a plan. A node may cite
+a `source`, such as a numbered result in a book, and may be marked `wrong` by hand when its
+statement was found false or unprovable as stated.
+
+The kind and the description follow the same rule as the dependencies below: the plan's `kind`
+and `desc` are what the tracker has until the declaration exists and, for the description, carries
+a doc comment; from then on the declaration says whether it is a theorem, the doc comment is the
+description everywhere (`show`, `ready`, `graph`), and the plan's copies are superseded. A
+finished, documented node needs nothing in the plan but its id.
+
+Renaming a declaration is renaming the node. Correcting a statement is editing the description
+and the Lean under the same name, or renaming if the corrected statement deserves a new name.
+"Wrong" is a state a node passes through, not a new object.
+
+### Dependencies
+
+Each node lists the nodes its proof is expected to use. That list is a suggestion: while the
+node is open it is all the tracker has, and readiness is judged by it. Once the node is proved,
+its dependencies are read off the declaration instead: the tracked ids reachable from its type
+and proof through untracked constants of the project, stopping at tracked ids and at anything
+outside the project (Mathlib, core). The suggestion is then ignored, and `show` says which
+suggestions the proof did not use and which real dependencies were never suggested. While a
+node is only stated, both are in force.
+
+The real graph is acyclic by construction. A cycle among suggestions is a lint error.
+
+### States
 
 | state | meaning |
 |---|---|
@@ -85,59 +112,85 @@ Use literal strings (`'…'`) for descriptions, so that `\` and `"` need no esca
 | `axioms` | the declaration exists and depends on some other axiom, or is itself an axiom |
 | `wrong` | the `wrong` field is set, whatever the declaration says |
 
-`deps` is a suggestion. While a node is open it is all the tracker has, and readiness is judged
-by it. Once the node is proved, dependencies are read off the declaration: the tracked ids
-reachable from its type and proof through untracked constants of the project, stopping at
-tracked ids and at anything outside the project. The suggestion is then ignored; `show` says
-which suggestions the proof did not use and which real dependencies were not suggested. While a
-node is only stated, both are shown.
+A node is *ready* when it is open or stated and every dependency in force is proved. `check`
+compares with the previous cache and reports every node whose state went down, which is how a
+renamed or broken declaration shows up.
 
-`check` compares with the previous cache and reports every node whose state went down, which is
-how a renamed declaration shows up.
+### Groups
 
-`lint` reports: plan errors (unparsable files, missing fields, unknown kinds, unknown or self
-dependencies, duplicate ids, missing parents), cycles among suggestions, empty descriptions,
-`wrong` without a reason, and, once checked, nodes planned as theorems that are not, nodes that
-are axioms, and declarations that live in a module other than their group's.
+A group is a set of nodes in one file. Its kind says what it is for: a `task` handed to one
+sub-agent, a `section` or `chapter` of a book, a `module`, or any other word; the tracker treats
+every kind alike, and `ready` lists tasks unless told otherwise. Groups nest through `parent`,
+and counts roll up. A group is *done* when every node in it and under it is proved, and *ready*
+when it is not done and every dependency of its nodes that lies outside it is proved.
 
-## Graph exports
+A group may name the `module` its declarations should live in. Once a node is attached, `lint`
+compares that with the module the environment records for the declaration, so a lemma that
+landed in the wrong file is reported without anyone looking for it.
 
-`tracker graph` is the contract for anything that wants a picture; the tracker itself does not
-draw. `--under G` restricts the output to a group and its descendants, which is the only way a
-layout stays readable past a few hundred nodes.
+## Plan files
 
-JSON (the default) is one object with three arrays:
+One TOML file per group, in the plan directory. The file stem is the group's name.
 
-| array | fields |
-|---|---|
-| `groups` | `name`, `kind`, `title`, `parent`, `module`, `done`, `ready` |
-| `nodes` | `id`, `group`, `kind`, `state`, `desc`, `source`, `wrong` |
-| `edges` | `from`, `to`, `real`, `suggested` |
+```toml
+kind = "task"                                     # default "task"
+title = "Conjugates of improper functions"        # default: the file stem
+parent = "duality"                                # optional
+module = "Tdaf.Analysis.Convex.Duality.Improper"  # optional
+namespace = "Tdaf.ConvexAnalysis"                 # ids below are relative to this; optional
+notes = '''
+Anything a sub-agent should read before starting.
+'''
 
-An edge means `from` depends on `to`. `real` is set when the dependency was read from the
-proof, `suggested` when it was written in `deps`; both can be set.
-
-DOT (`--dot`) has one cluster per group, nodes filled by state (green proved, yellow stated, red
-wrong, orange axioms, white open), real edges solid and suggested edges dashed. Render it with
-Graphviz:
-
-```
-lake exe tracker graph --dot --under rockafellar-part3 | dot -Tsvg -o part3.svg
-```
-
-## Layout
-
-```
-Tracker/Types.lean      Node, Group, Plan, NodeState, DeclInfo, Cache
-Tracker/Toml.lean       Lake.Toml wrappers: load, decode with positions
-Tracker/Plan.lean       read a directory of groups, resolve ids and dependencies
-Tracker/Graph.lean      states, effective dependencies, readiness, roll-ups, cycles
-Tracker/Check.lean      import the project and resolve every id (the only Lean-environment code)
-Tracker/Cache.lean      read and write .lake/tracker/check.json
-Tracker/Commands.lean   status, ready, show, lint, graph
-Main.lean               the CLI
-examples/tdaf/          a small plan over the tdaf library, for trying the commands
+[[node]]
+id = "conj_eq_top_of_exists_eq_bot"               # the Lean identifier, relative to namespace
+kind = "theorem"                                  # definition | theorem; until the declaration exists
+desc = 'If f takes the value -∞ anywhere, then f* is identically +∞.'   # until a doc comment exists
+deps = ["conj", "conj_bot"]                       # suggested dependencies, by id; until proved
+source = "Rockafellar, §12"                       # optional
+# wrong = 'why the statement is false or unprovable as stated'   # optional, hand-set
 ```
 
-The tracker must build on the same toolchain as the project it checks, because it reads the
-project's `.olean` files.
+`kind` and `desc` are required while the node is open; `kind` is superseded once the
+declaration exists, `desc` once it has a doc comment, and `deps` once the node is proved. `lint`
+says when each can be removed, when an open node lacks a `kind` or a `desc`, when a planned kind
+disagrees with the declaration, and when an attached node has neither a `desc` nor a doc comment. Ids resolve like Lean names: relative to the group's `namespace` if it has one,
+otherwise as written, and `_root_.` forces an absolute name. A dependency may name a node of any group,
+relative first and then absolute, and must name a tracked node. `def`, `thm` and `lemma` are
+accepted for `kind`, and `description` for `desc`.
+
+Write descriptions as literal strings (`'…'` or `'''…'''`), so that `\` and `"` need no
+escaping. A new node is a block appended after a blank line, which is why the files merge
+cleanly under git. `examples/tdaf/` is a small plan over the `tdaf` library for trying the
+commands.
+
+## Workflow
+
+The tracker adds no coordination machinery; it fits the usual arrangement of one orchestrator
+merging the work of sub-agents that each own a git worktree.
+
+**The orchestrator**, on the main branch: `lake build`, `tracker check`, `tracker lint`. Then
+`tracker ready` for the tasks whose outside dependencies are all proved, choosing ones with
+distinct `module` values so that no two sub-agents write the same file. For each, a worktree
+and a branch, and a sub-agent started with the output of `tracker show <task>`: the task's nodes
+and notes, and for every dependency its state and its signature printed from the environment
+rather than copied by hand.
+
+**A sub-agent**, in its worktree: writes Lean in the task's module, and may edit only its own
+task's file, usually not at all. Proving the planned nodes under their planned names changes
+only Lean code; the tracker sees the progress in the build. It touches the file when the plan
+changes in its hands: a statement found wrong, a rename, a theorem split into clauses, a helper
+worth tracking. Anything it learns about other groups goes in its report. The cache is under the
+worktree's own `.lake/`, so its `check` describes its worktree and nothing else.
+
+**Merging**: plan files changed on different branches are disjoint and merge cleanly; so do the
+modules. The orchestrator then rebuilds, runs `check` on main, and reads `status`. A task is
+done when main's check says every node is proved, never when a report does. `lint` on the
+merged tree catches the rest: an id two branches both added, a dependency on a node another
+branch deleted, a declaration that landed in the wrong module.
+
+Three rules keep this conflict-free. Additive tasks touch only their own module, and the
+project's root import file is regenerated on main rather than edited on branches. Tasks that
+change existing declarations, a rename or a restatement of a node marked `wrong`, run alone.
+Nodes may be merged while still `stated`, so that a skeleton can be shared before its proofs
+exist; a release is when nothing is stated.

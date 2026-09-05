@@ -5,10 +5,6 @@ namespace = "Tdaf.ConvexAnalysis"
 
 [[node]]
 id = "exists_separates_iff_iSup_le_iInf"
-kind = "theorem"
-desc = 'Two nonempty sets are separated by some continuous functional f iff sup f on the first is at most inf f on the second.'
 
 [[node]]
 id = "exists_separatesStrongly_iff_iSup_lt_iInf"
-kind = "theorem"
-desc = 'Strong separation by some f iff sup f on the first set is strictly less than inf f on the second.'

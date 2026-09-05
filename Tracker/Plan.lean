@@ -31,12 +31,14 @@ open Toml in
 private def decodeNode (group : String) (ns : Option Name) (ictx : Parser.InputContext)
     (nt : Lake.Toml.Table) (ref : Syntax) : Lake.Toml.EDecodeM Node := do
   let rawId ← str nt `id ref
-  let kindS ← str nt `kind ref
-  let some kind := NodeKind.parse? kindS
-    | fail ref s!"unknown node kind '{kindS}' (use definition or theorem)"
+  let kind ← match ← str? nt `kind with
+    | none => pure none
+    | some kindS => match NodeKind.parse? kindS with
+      | some k => pure (some k)
+      | none => fail ref s!"unknown node kind '{kindS}' (use definition or theorem)"
   let desc ← match ← str? nt `desc with
-    | some d => pure d
-    | none => str nt `description ref
+    | some d => pure (some d)
+    | none => str? nt `description
   let rawDeps ← strArray? nt `deps
   let source ← str? nt `source
   let wrong ← str? nt `wrong

@@ -4,14 +4,12 @@ title = "Rockafellar §17: Carathéodory's Theorem (excerpt)"
 module = "Tdaf.Surface.Rockafellar.Part4.Section17"
 namespace = "Rockafellar"
 
+# `kind` kept on purpose: the declaration is a definition (the proposition), and `lint` says so.
 [[node]]
 id = "corollary_17_1_4"
 kind = "theorem"
-desc = 'Corollary 17.1.4 as printed.'
 source = "Rockafellar, Corollary 17.1.4"
 wrong = 'False as printed; the counterexample on ℝ is Rockafellar.corollary_17_1_4_false.'
 
 [[node]]
 id = "corollary_17_1_4_false"
-kind = "theorem"
-desc = 'The printed Corollary 17.1.4 fails: a counterexample on ℝ.'

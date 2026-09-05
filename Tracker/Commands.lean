@@ -121,7 +121,7 @@ def ready (v : View) (kind? : Option String) (all : Bool) (json : Bool) : IO UIn
     IO.println s!"  {c.open} open, {c.stated} stated, {c.proved} proved"
     for n in v.groupNodes g.name do
       if v.state n.id != .proved then
-        IO.println s!"    {pad (v.state n.id).toString 7} {v.plan.shortId n}  — {firstLine n.desc}"
+        IO.println s!"    {pad (v.state n.id).toString 7} {v.plan.shortId n}  — {firstLine (v.descOf n.id)}"
   return 0
 
 -- ## show
@@ -135,8 +135,12 @@ private def depLine (v : View) (d : Name) (tag : String) : String :=
 
 def showNode (v : View) (n : Node) : IO Unit := do
   let st := v.state n.id
-  IO.println s!"{n.id}  [{n.kind}, {st}]  group {n.group}"
-  IO.println (indent n.desc)
+  IO.println s!"{n.id}  [{v.kindName n.id}, {st}]  group {n.group}"
+  let desc := v.descOf n.id
+  if desc.isEmpty then IO.println "  (no description: no desc in the plan and no doc comment)"
+  else IO.println (indent desc)
+  if v.hasDoc n.id then
+    if let some d := n.desc then IO.println (indent s!"(from the doc comment; the plan's desc is superseded: {firstLine d})")
   if let some s := n.source then IO.println s!"  source: {s}"
   if let some w := n.wrong then IO.println s!"  wrong: {w}"
   if let some d := v.decl[n.id]? then
@@ -178,8 +182,8 @@ def showGroup (v : View) (g : Group) : IO Unit := do
   if !g.nodes.isEmpty then
     IO.println "\nnodes:"
     for n in g.nodes do
-      IO.println s!"  {pad (v.state n.id).toString 7} {pad n.kind.toString 10} {v.plan.shortId n}"
-      IO.println (indent n.desc 20)
+      IO.println s!"  {pad (v.state n.id).toString 7} {pad (v.kindName n.id) 10} {v.plan.shortId n}"
+      IO.println (indent (v.descOf n.id) 20)
       if let some w := n.wrong then IO.println (indent s!"wrong: {w}" 20)
   let outside := v.outsideDeps g.name
   if !outside.isEmpty then
@@ -218,13 +222,35 @@ def lint (v : View) : IO UInt32 := do
     for n in g.nodes do
       if let some w := n.wrong then
         if isBlank w then errors := errors.push s!"{g.path}:{n.line}: {n.id} is marked wrong without a reason"
-      if isBlank n.desc then errors := errors.push s!"{g.path}:{n.line}: {n.id} has an empty description"
+      -- descriptions: the plan's `desc` until there is a doc comment, then the doc comment
+      if let some d := n.desc then
+        if isBlank d then errors := errors.push s!"{g.path}:{n.line}: {n.id} has an empty desc"
+      if v.cache.isSome then
+        let attached := (v.decl[n.id]?.map (·.found)).getD false
+        if !attached && n.desc.isNone then
+          errors := errors.push s!"{g.path}:{n.line}: {n.id} is open and has no desc"
+        if attached && !v.hasDoc n.id && n.desc.isNone then
+          warnings := warnings.push s!"{g.path}:{n.line}: {n.id} has neither a desc nor a doc comment"
+        if v.hasDoc n.id && n.desc.isSome then
+          warnings := warnings.push s!"{g.path}:{n.line}: {n.id}: desc is superseded by its doc comment; remove it"
+        if v.state n.id == .proved && !n.deps.isEmpty then
+          warnings := warnings.push s!"{g.path}:{n.line}: {n.id}: deps is superseded by the real dependencies; remove it"
+      if v.cache.isSome && n.kind.isNone && !((v.decl[n.id]?.map (·.found)).getD false) then
+        errors := errors.push s!"{g.path}:{n.line}: {n.id} is open and has no kind"
       if let some d := v.decl[n.id]? then
         if d.found then
-          if n.kind == .theorem && !d.isTheorem && !d.isAxiom then
-            warnings := warnings.push s!"{g.path}:{n.line}: {n.id} is planned as a theorem but the declaration is not one"
-          if n.kind == .definition && d.isTheorem then
-            warnings := warnings.push s!"{g.path}:{n.line}: {n.id} is planned as a definition but the declaration is a theorem"
+          match n.kind with
+          | some .theorem =>
+            if !d.isTheorem && !d.isAxiom then
+              warnings := warnings.push s!"{g.path}:{n.line}: {n.id} is planned as a theorem but the declaration is not one"
+            else
+              warnings := warnings.push s!"{g.path}:{n.line}: {n.id}: kind is superseded by the declaration; remove it"
+          | some .definition =>
+            if d.isTheorem then
+              warnings := warnings.push s!"{g.path}:{n.line}: {n.id} is planned as a definition but the declaration is a theorem"
+            else
+              warnings := warnings.push s!"{g.path}:{n.line}: {n.id}: kind is superseded by the declaration; remove it"
+          | none => pure ()
           if d.isAxiom then
             errors := errors.push s!"{g.path}:{n.line}: {n.id} is an axiom"
           match g.module, d.module with
@@ -247,8 +273,8 @@ def graphJson (v : View) (under? : Option String) : Json :=
   let nodes : Array (Name × Node) := v.plan.nodes.toArray.filter (fun p => inGroups.contains p.2.group)
     |>.qsort (·.1.toString < ·.1.toString)
   let nodeJson := nodes.map fun (id, n) => Json.mkObj [
-    ("id", id.toString), ("group", n.group), ("kind", n.kind.toString),
-    ("state", (v.state id).toString), ("desc", n.desc),
+    ("id", id.toString), ("group", n.group), ("kind", toJson ((v.kindOf id).map toString)),
+    ("state", (v.state id).toString), ("desc", v.descOf id),
     ("source", toJson n.source), ("wrong", toJson n.wrong)]
   let edges := nodes.flatMap fun (id, n) =>
     let real := v.realDeps id

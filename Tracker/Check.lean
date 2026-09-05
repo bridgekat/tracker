@@ -65,6 +65,8 @@ def resolveDecl (roots : Array Name) (tracked : Std.HashMap Name Node)
         pure (f.fmt.pretty 100)
       catch _ => pure ""
     let uses ← reachTracked env roots tracked used id
+    let doc := (← findDocString? env id).map fun d =>
+      String.mk (d.toList.reverse.dropWhile Char.isWhitespace).reverse
     return {
       id, found := true
       module := moduleOf env id
@@ -74,7 +76,7 @@ def resolveDecl (roots : Array Name) (tracked : Std.HashMap Name Node)
       hasSorry := axioms.contains ``sorryAx
       axioms
       axiomsOk := axioms.all fun a => standardAxioms.contains a
-      uses, signature := sig }
+      uses, signature := sig, doc }
 
 /-- Best-effort short commit hash of the project. -/
 def gitCommit (root : System.FilePath) : IO String := do

@@ -73,6 +73,24 @@ def mkView (plan : Plan) (cache : Option Cache) : View := Id.run do
 namespace View
 
 def state (v : View) (id : Name) : NodeState := v.states.getD id .«open»
+
+/-- Whether the declaration has a doc comment, which then supersedes the plan's `desc`. -/
+def hasDoc (v : View) (id : Name) : Bool := (v.decl[id]?.bind (·.doc)).isSome
+
+/-- The kind in force: read from the declaration once attached, else the plan's `kind`. -/
+def kindOf (v : View) (id : Name) : Option NodeKind :=
+  match v.decl[id]? with
+  | some d => if d.found then some (if d.isTheorem then .theorem else .definition)
+              else (v.plan.node? id).bind (·.kind)
+  | none => (v.plan.node? id).bind (·.kind)
+
+def kindName (v : View) (id : Name) : String := ((v.kindOf id).map toString).getD "?"
+
+/-- The description in force: the doc comment once there is one, else the plan's `desc`. -/
+def descOf (v : View) (id : Name) : String :=
+  match v.decl[id]?.bind (·.doc) with
+  | some d => d
+  | none => ((v.plan.node? id).bind (·.desc)).getD ""
 def effDeps (v : View) (id : Name) : Array Name := v.eff.getD id #[]
 def realDeps (v : View) (id : Name) : Array Name := v.real.getD id #[]
 

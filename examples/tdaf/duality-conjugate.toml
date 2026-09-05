@@ -10,38 +10,27 @@ which is the IsCompatiblePairing hypothesis.
 
 [[node]]
 id = "conj"
-kind = "definition"
-desc = 'The conjugate f* of f : E → EReal against a pairing B, as a function on F.'
 
 [[node]]
 id = "biconj"
-kind = "definition"
-desc = 'The biconjugate f** = (f*)*, back on E.'
-deps = ["conj"]
 
+# No doc comment in the library for these two, so the descriptions stay.
 [[node]]
 id = "conj_top"
-kind = "theorem"
 desc = 'The conjugate of the constant +∞ is the constant -∞.'
-deps = ["conj"]
 
 [[node]]
 id = "conj_bot"
-kind = "theorem"
 desc = 'The conjugate of the constant -∞ is the constant +∞.'
-deps = ["conj"]
 
 [[node]]
 id = "exists_affineFn_le_of_lt"
-kind = "theorem"
-desc = 'A closed convex f is bounded below by an affine function that exceeds any real α < f x₀ at x₀.'
-deps = ["exists_separatesStrongly_iff_iSup_lt_iInf"]
 
-# The suggestion names the separation theorem; the real proof goes through
-# exists_affineFn_le_of_lt and the closure lemmas, which is what `show` reports once checked.
+# Deliberately kept with `desc` and `deps` although it is proved and documented, so that `lint`
+# reports both as superseded and `show` reports the unused suggestion: the real proof goes through
+# exists_affineFn_le_of_lt and the closure lemmas, not the separation theorem.
 [[node]]
 id = "biconj_eq_clFn"
-kind = "theorem"
 desc = 'Fenchel–Moreau: for a compatible pairing and a convex f : E → EReal, f** = cl f.'
 deps = ["biconj", "clFn", "exists_separatesStrongly_iff_iSup_lt_iInf"]
 source = "Rockafellar, Theorem 12.2"
