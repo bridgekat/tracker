@@ -47,7 +47,7 @@ Every command checks first when the cache is stale, that is when the plan, the p
 oleans, the root modules or the options changed since it was written.
 
   --root DIR   project root (default: current directory)
-  --dir DIR    directory of group files (default: <root>/tracker)
+  --dir DIR    directory of group files (default: <root>/plans)
   --roots A,B  root modules to import (default: lean_lib names in lakefile.toml, else the cache's)
   --no-exts    skip the imported modules' initializers; printed signatures lose their notation
   --no-check   answer from the cache as it is, even if stale"
@@ -112,7 +112,7 @@ unsafe def run (a : Args) : IO UInt32 := do
   let root : System.FilePath := (a.flags.get? "root").getD "."
   let dir : System.FilePath := match a.flags.get? "dir" with
     | some d => d
-    | none => root / "tracker"
+    | none => root / "plans"
   let some cmd := a.positional[0]? | IO.println usage; return 2
   if cmd == "help" || a.flags.contains "help" then IO.println usage; return 0
   unless commands.contains cmd do

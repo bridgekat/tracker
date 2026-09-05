@@ -4,7 +4,7 @@ import Tracker.Toml
 /-!
 # Loading the plan
 
-Read every `*.toml` file under the tracker directory as a group named by its path there,
+Read every `*.toml` file under the plan directory as a group named by its path there,
 resolve node ids and suggested dependencies, and index everything. Errors are collected, not
 thrown, so that one bad file does not hide the others.
 -/
@@ -91,7 +91,7 @@ partial def groupFiles (dir : System.FilePath) (base : String := "") :
 /-- Load every group under a directory and resolve dependencies. -/
 def loadPlan (dir : System.FilePath) : IO Plan := do
   unless ← dir.isDir do
-    throw <| IO.userError s!"no tracker directory at {dir}"
+    throw <| IO.userError s!"no plan directory at {dir}"
   let mut plan : Plan := {}
   let mut h : UInt64 := 0
   for (name, f) in ← groupFiles dir do

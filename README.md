@@ -30,7 +30,6 @@ lake exe tracker check     # import the project, resolve every id, write the cac
 lake exe tracker status    # every command does the same first when the cache is stale
 ```
 
-Any directory but `tracker/` will do for the submodule, since that is where the plan lives.
 Tell the agents where the README is: one line in the project's instructions file, saying to
 read `tools/tracker/README.md` before touching the plan. A `git = "…"` require works as well,
 and Lake then keeps the clone, README included, under `.lake/packages/tracker/`; and a clone
@@ -63,7 +62,7 @@ graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
 ```
 
 `--root` is the project root (default `.`); `--dir` is the directory of plan files (default
-`<root>/tracker`). A check imports the `lean_lib` roots of the project's `lakefile.toml` unless
+`<root>/plans`). A check imports the `lean_lib` roots of the project's `lakefile.toml` unless
 `--roots` says otherwise, and runs the imported modules' initializers so that printed signatures
 carry their notation; `--no-exts` skips that. A group is named by its path under the plan
 directory, `Numbers/Odd`, or by an unambiguous trailing part of it, `Odd`; `show` also takes a
@@ -170,7 +169,7 @@ the group `Numbers/Odd`, the plan for `Numbers.Odd`, and a child of `Numbers.tom
 holds the children of the group file of the same name beside it, and must have one.
 
 ```toml
-# tracker/Numbers/Odd.toml
+# plans/Numbers/Odd.toml
 namespace = "Numbers"                  # ids below are relative to this; optional
 desc = '''
 What the module is for, and anything a sub-agent should know before writing it.
@@ -198,7 +197,7 @@ field or one from an older plan cannot pass unnoticed.
 
 Write descriptions as literal strings (`'…'` or `'''…'''`), so that `\` and `"` need no
 escaping. A new node is a block appended after a blank line, which is why the files merge
-cleanly under git. `examples/tracker/` is the plan of the example project.
+cleanly under git. `examples/plans/` is the plan of the example project.
 
 ## Workflow
 
