@@ -1,9 +1,9 @@
 name = "example"
-defaultTargets = ["Example"]
+defaultTargets = ["Numbers"]
 
 [[require]]
 name = "tracker"
 path = ".."
 
 [[lean_lib]]
-name = "Example"
+name = "Numbers"

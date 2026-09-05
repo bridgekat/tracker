@@ -1,14 +1,11 @@
 # A statement that is false as proposed stays `wrong` for good, with the counterexample named.
-kind = "section"
-title = "A refuted proposal"
-module = "Example.Wrong"
-namespace = "Example"
+namespace = "Numbers"
 
 # `kind` kept on purpose: the declaration is a definition (the proposition), and `lint` says so.
 [[node]]
 id = "everyEven"
 kind = "theorem"
-wrong = 'False: 1 is not even; the counterexample is Example.not_everyEven.'
+wrong = 'False: 1 is not even; the counterexample is Numbers.not_everyEven.'
 
 [[node]]
 id = "not_everyEven"

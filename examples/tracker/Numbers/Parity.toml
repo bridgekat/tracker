@@ -1,9 +1,7 @@
 # Finished: kinds, doc comments and real dependencies are read from the library, so the nodes
-# keep only their id. One declaration has no doc comment and keeps its description.
-kind = "module"
-title = "Parity"
-module = "Example.Parity"
-namespace = "Example"
+# keep only their id, and the module's doc comment describes the group. One declaration has no
+# doc comment and keeps its description.
+namespace = "Numbers"
 
 [[node]]
 id = "IsEven"

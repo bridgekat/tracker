@@ -1,15 +1,13 @@
 # The task in progress: one node is misfiled, one is stated with `sorry`, one is not written yet.
-# Every outside dependency is proved, so `tracker ready` lists it.
-kind = "task"
-title = "Odd numbers"
-module = "Example.Odd"
-namespace = "Example"
-notes = '''
+# Every outside dependency is proved, so `tracker ready` lists it. The `desc` is kept although
+# the module already has a doc comment, so that `lint` reports it as superseded.
+namespace = "Numbers"
+desc = '''
 Prove the odd-number lemmas from the parity module. `IsEven.add_one_odd` does the same in the
 other direction and is the model to follow.
 '''
 
-# Lives in Example.Parity, not here: `lint` reports the placement mismatch.
+# Lives in Numbers.Parity, not here: `lint` reports the placement mismatch.
 [[node]]
 id = "isOdd_one"
 

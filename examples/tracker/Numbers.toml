@@ -1,0 +1,2 @@
+# The root module: an import hub with no nodes of its own, whose status is the roll-up of the
+# modules under it and whose description is the module's doc comment.

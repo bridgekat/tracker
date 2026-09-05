@@ -65,8 +65,7 @@ def resolveDecl (roots : Array Name) (tracked : Std.HashMap Name Node)
         pure (f.fmt.pretty 100)
       catch _ => pure ""
     let uses ← reachTracked env roots tracked used id
-    let doc := (← findDocString? env id).map fun d =>
-      String.ofList (d.toList.reverse.dropWhile Char.isWhitespace).reverse
+    let doc := (← findDocString? env id).map trim
     return {
       id, found := true
       module := moduleOf env id
@@ -98,13 +97,15 @@ unsafe def runCheck (plan : Plan) (roots : Array Name)
     decls := decls.push d
   let t2 ← IO.monoMsNow
   IO.eprintln s!"resolved {ids.size} ids in {t2 - t1} ms"
-  -- the project's modules, fingerprinted, so that later commands can tell when the build changed
+  -- the project's modules: fingerprinted, so that later commands can tell when the build
+  -- changed, and with the first `/-! … -/` block as the module's description
   let mut modules : Array ModuleRec := #[]
   for m in env.allImportedModuleNames do
     if isProjectModule roots m then
       let olean ← findOLean m
+      let doc := (getModuleDoc? env m).bind fun ds => ds[0]?.map fun d => trim d.doc
       modules := modules.push {
-        module := m, olean := olean.toString, hash := (← oleanFingerprint olean).getD "" }
+        module := m, olean := olean.toString, hash := (← oleanFingerprint olean).getD "", doc }
   -- states, and regressions against the previous cache
   let cache : Cache := { roots, loadExts, planHash := plan.hash, modules, decls }
   let view := mkView plan (some cache)

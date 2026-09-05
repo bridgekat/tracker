@@ -26,6 +26,8 @@ structure View where
   dependents : Std.HashMap Name (Array Name) := {}
   /-- Groups by the group whose directory holds them. -/
   children : Std.HashMap String (Array String) := {}
+  /-- The project's compiled modules, from the cache. -/
+  modules : Std.HashMap Name ModuleRec := {}
 
 /-- The state of a node given what the cache knows about it. -/
 def nodeState (n : Node) (d : Option DeclInfo) : NodeState :=
@@ -52,6 +54,8 @@ def mkView (plan : Plan) (cache : Option Cache) : View := Id.run do
   if let some c := cache then
     for d in c.decls do
       v := { v with decl := v.decl.insert d.id d }
+    for m in c.modules do
+      v := { v with modules := v.modules.insert m.module m }
   for (id, n) in plan.nodes.toArray do
     let d := v.decl[id]?
     let st := nodeState n d
@@ -117,6 +121,28 @@ def groupNodes (v : View) (name : String) : Array Node :=
     | some g => g.nodes
     | none => #[]
 
+/-- The group's own nodes. -/
+def groupOwn (v : View) (name : String) : Array Node :=
+  (v.plan.group? name).map (·.nodes) |>.getD #[]
+
+/-- The group's own nodes that can be worked on: open or stated. -/
+def groupWork (v : View) (name : String) : Array Node :=
+  (v.groupOwn name).filter fun n => match v.state n.id with
+    | .«open» | .stated => true
+    | _ => false
+
+/-- Whether the group's module is in the compiled library. -/
+def groupAttached (v : View) (g : Group) : Bool := v.modules.contains g.module
+
+/-- The module's doc comment, which then supersedes the plan's `desc`. -/
+def moduleDoc? (v : View) (g : Group) : Option String := v.modules[g.module]?.bind (·.doc)
+
+/-- The description in force: the module's doc comment once there is one, else the plan's `desc`. -/
+def groupDesc (v : View) (g : Group) : String :=
+  match v.moduleDoc? g with
+  | some d => d
+  | none => g.desc.getD ""
+
 structure Counts where
   «open» : Nat := 0
   stated : Nat := 0
@@ -127,8 +153,8 @@ structure Counts where
 
 def Counts.total (c : Counts) : Nat := c.open + c.stated + c.proved + c.axioms + c.wrong
 
-def counts (v : View) (name : String) : Counts :=
-  (v.groupNodes name).foldl (init := {}) fun c n =>
+def countNodes (v : View) (ns : Array Node) : Counts :=
+  ns.foldl (init := {}) fun c n =>
     match v.state n.id with
     | .«open» => { c with «open» := c.open + 1 }
     | .stated => { c with stated := c.stated + 1 }
@@ -136,24 +162,29 @@ def counts (v : View) (name : String) : Counts :=
     | .axioms => { c with axioms := c.axioms + 1 }
     | .wrong => { c with wrong := c.wrong + 1 }
 
+/-- Counts over the group and its descendants. -/
+def counts (v : View) (name : String) : Counts := v.countNodes (v.groupNodes name)
+
 /-- Done when every node in the subtree is proved (and there is at least one). -/
 def groupDone (v : View) (name : String) : Bool :=
   let ns := v.groupNodes name
   !ns.isEmpty && ns.all fun n => v.state n.id == .proved
 
-/-- Dependencies of the subtree's nodes that lie outside the subtree, with their states. -/
+/-- Dependencies of the group's workable nodes that are not its own nodes. -/
 def outsideDeps (v : View) (name : String) : Array Name := Id.run do
-  let inside : Std.HashSet Name := (v.groupNodes name).foldl (init := {}) fun s n => s.insert n.id
+  let inside : Std.HashSet Name := (v.groupOwn name).foldl (init := {}) fun s n => s.insert n.id
   let mut out := #[]
-  for n in v.groupNodes name do
+  for n in v.groupWork name do
     for d in v.effDeps n.id do
       unless inside.contains d || out.contains d do out := out.push d
   return out
 
-/-- Ready when not done and every outside dependency is proved. -/
+/--
+Ready when the group has open or stated nodes of its own and every dependency of those outside
+the group is proved: the module can be worked on now.
+-/
 def groupReady (v : View) (name : String) : Bool :=
-  !v.groupDone name && (v.groupNodes name).size > 0 &&
-    (v.outsideDeps name).all fun d => v.state d == .proved
+  !(v.groupWork name).isEmpty && (v.outsideDeps name).all fun d => v.state d == .proved
 
 /-- A cycle among suggested dependencies, if any (as the list of ids on it). -/
 partial def suggestedCycle (v : View) : Option (List Name) := Id.run do

@@ -1,0 +1,11 @@
+# Not written yet, and blocked: its node depends on an open node of the odd-numbers task, so
+# `tracker ready` leaves it out until that is proved. Until the module exists, the plan's `desc`
+# is its description.
+namespace = "Numbers"
+desc = 'Products of odd numbers.'
+
+[[node]]
+id = "IsOdd.mul"
+kind = "theorem"
+desc = 'The product of two odd numbers is odd.'
+deps = ["IsOdd", "IsOdd.add_odd"]

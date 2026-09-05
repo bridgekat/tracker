@@ -45,7 +45,7 @@ tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <command
 
 check [--force]                   make the cache fresh: import the project, resolve every id
 status [group] [--json]           counts per group, rolled up through parents; regressions
-ready [--kind K | --all] [--json] groups whose outside dependencies are all proved
+ready [--json]                    groups whose outside dependencies are all proved
 show <group | id>                 the brief for a group, or everything about one node
 lint                              plan errors, cycles, placement and kind mismatches, superseded fields
 graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
@@ -55,7 +55,7 @@ graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
 `<root>/tracker`). A check imports the `lean_lib` roots of the project's `lakefile.toml` unless
 `--roots` says otherwise, and runs the imported modules' initializers so that printed signatures
 carry their notation; `--no-exts` skips that. A group is named by its path under the plan
-directory, `numbers/odd`, or by an unambiguous trailing part of it, `odd`; `show` also takes a
+directory, `Numbers/Odd`, or by an unambiguous trailing part of it, `Odd`; `show` also takes a
 node id, in full or by an unambiguous suffix. `lint` exits non-zero on errors, and no check runs
 while the plan has any.
 
@@ -75,17 +75,17 @@ three arrays:
 
 | array | fields |
 |---|---|
-| `groups` | `name`, `kind`, `title`, `parent`, `module`, `done`, `ready` |
+| `groups` | `name`, `parent`, `desc`, `done`, `ready` |
 | `nodes` | `id`, `group`, `kind`, `state`, `desc`, `source`, `wrong` |
 | `edges` | `from`, `to`, `real`, `suggested` |
 
 An edge means `from` depends on `to`; `real` is set when the dependency was read from the proof,
 `suggested` when it was written in the plan, and both can be set. A group's `parent` is the group
-whose directory holds it. The DOT form has one cluster per group, nodes filled by state, real
-edges solid and suggested edges dashed:
+whose directory holds it, and its module is its name with `.` for `/`. The DOT form has one
+cluster per group, nodes filled by state, real edges solid and suggested edges dashed:
 
 ```
-lake exe tracker graph --dot --under numbers | dot -Tsvg -o numbers.svg
+lake exe tracker graph --dot --under Numbers | dot -Tsvg -o numbers.svg
 ```
 
 ## Plan graph
@@ -136,32 +136,34 @@ renamed or broken declaration shows up.
 
 ### Groups
 
-A group is a set of nodes in one file. Its kind says what it is for: a `task` handed to one
-sub-agent, a `section` or `chapter` of a book, a `module`, or any other word; the tracker treats
-every kind alike, and `ready` lists tasks unless told otherwise. Groups nest through
-directories: the children of `numbers` are the group files in `numbers/`, beside `numbers.toml`,
-and counts roll up. A group is *done* when every node in it and under it is proved, and *ready*
-when it is not done and every dependency of its nodes that lies outside it is proved.
+A group is the plan for one module: the nodes that should live in it, and what it is for. It is
+named by its file's path under the plan directory, which is the module's path too: `Numbers/Odd`
+is the plan for `Numbers.Odd`. Groups nest as modules do, the children of `Numbers` being the
+group files in `Numbers/` beside `Numbers.toml`, and counts roll up. A group may stand for a
+module that is only a directory, and a module need not have a group.
 
-A group may name the `module` its declarations should live in. Once a node is attached, `lint`
-compares that with the module the environment records for the declaration, so a lemma that
-landed in the wrong file is reported without anyone looking for it.
+The description follows the rule of a node's: the plan's `desc` is what the tracker has until
+the module exists and has a `/-! … -/` doc comment, whose first block is then the description
+everywhere, and the plan's copy is superseded. Once a node is attached, `lint` compares the
+module the environment records for it with the group's, so a lemma that landed in the wrong
+file is reported without anyone looking for it.
+
+A group is *done* when every node in it and under it is proved, and *ready* when it has open
+or stated nodes of its own and every dependency of those outside the group is proved: the
+module can be worked on now. `ready` lists the ready groups.
 
 ## Plan files
 
-One TOML file per group, under the plan directory. The group's name is the file's path from
-there without `.toml`: `numbers/odd.toml` is the group `numbers/odd`, a child of `numbers.toml`.
-A directory holds the children of the group file of the same name beside it, and must have one.
+One TOML file per group, under the plan directory, at its module's path: `Numbers/Odd.toml` is
+the group `Numbers/Odd`, the plan for `Numbers.Odd`, and a child of `Numbers.toml`. A directory
+holds the children of the group file of the same name beside it, and must have one.
 
 ```toml
-# tracker/numbers/odd.toml
-kind = "task"                          # default "task"
-title = "Odd numbers"                  # default: the file stem
-module = "Example.Odd"                 # optional
-namespace = "Example"                  # ids below are relative to this; optional
-notes = '''
-Anything a sub-agent should read before starting.
-'''
+# tracker/Numbers/Odd.toml
+namespace = "Numbers"                  # ids below are relative to this; optional
+desc = '''
+What the module is for, and anything a sub-agent should know before writing it.
+'''                                    # until the module has a doc comment
 
 [[node]]
 id = "IsOdd.add_odd"                   # the Lean identifier, relative to namespace
@@ -173,10 +175,12 @@ source = "Textbook, Proposition 1.2"   # optional
 ```
 
 `kind` and `desc` are required while the node is open; `kind` is superseded once the
-declaration exists, `desc` once it has a doc comment, and `deps` once the node is proved. `lint`
-says when each can be removed, when an open node lacks a `kind` or a `desc`, when a planned kind
-disagrees with the declaration, and when an attached node has neither a `desc` nor a doc comment. Ids resolve like Lean names: relative to the group's `namespace` if it has one,
-otherwise as written, and `_root_.` forces an absolute name. A dependency may name a node of any group,
+declaration exists, `desc` once it has a doc comment, and `deps` once the node is proved. The
+group's `desc` is required while its module does not exist, and superseded once the module has
+a doc comment. `lint` says when each can be removed, when an open node or group lacks what it
+needs, when a planned kind disagrees with the declaration, and when an attached node or group
+has neither a `desc` nor a doc comment. Ids resolve like Lean names: relative to the group's
+`namespace` if it has one, otherwise as written, and `_root_.` forces an absolute name. A dependency may name a node of any group,
 relative first and then absolute, and must name a tracked node. `def`, `thm` and `lemma` are
 accepted for `kind`, and `description` for `desc`.
 
@@ -190,14 +194,14 @@ The tracker adds no coordination machinery; it fits the usual arrangement of one
 merging the work of sub-agents that each own a git worktree.
 
 **The orchestrator**, on the main branch: `lake build`, `tracker check`, `tracker lint`. Then
-`tracker ready` for the tasks whose outside dependencies are all proved, choosing ones with
-distinct `module` values so that no two sub-agents write the same file. For each, a worktree
-and a branch, and a sub-agent started with the output of `tracker show <task>`: the task's nodes
-and notes, and for every dependency its state and its signature printed from the environment
-rather than copied by hand.
+`tracker ready` for the groups whose outside dependencies are all proved; each is one module,
+so no two sub-agents write the same file. For each, a worktree and a branch, and a sub-agent
+started with the output of `tracker show <group>`: the module's description and nodes, and for
+every dependency its state and its signature printed from the environment rather than copied
+by hand.
 
-**A sub-agent**, in its worktree: writes Lean in the task's module, and may edit only its own
-task's file, usually not at all. Proving the planned nodes under their planned names changes
+**A sub-agent**, in its worktree: writes its module, and may edit only its own group's file,
+usually not at all. Proving the planned nodes under their planned names changes
 only Lean code; the tracker sees the progress in the build. It touches the file when the plan
 changes in its hands: a statement found wrong, a rename, a theorem split into clauses, a helper
 worth tracking. Anything it learns about other groups goes in its report. The cache is under the

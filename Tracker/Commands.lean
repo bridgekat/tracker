@@ -14,7 +14,7 @@ open Lean
 
 namespace Tracker
 
-/-- Pad or truncate to width. -/
+/-- Pad to width. -/
 def pad (s : String) (w : Nat) : String :=
   if s.length ≥ w then s else s ++ "".pushn ' ' (w - s.length)
 
@@ -48,7 +48,7 @@ def noCacheWarning (v : View) : IO Unit := do
 def isBlank (s : String) : Bool := s.all Char.isWhitespace
 
 /--
-A group by its name, or by an unambiguous trailing part of it: `odd` for `numbers/odd`. Says
+A group by its name, or by an unambiguous trailing part of it: `Odd` for `Numbers/Odd`. Says
 why when nothing matches or several do.
 -/
 def resolveGroup (v : View) (target : String) : IO (Option String) := do
@@ -65,12 +65,17 @@ def resolveGroup (v : View) (target : String) : IO (Option String) := do
 
 -- ## status
 
+/-- What a row says: done for the subtree; ready or blocked for the group's own nodes; else nothing. -/
+def View.groupState (v : View) (name : String) : String :=
+  if v.groupDone name then "done"
+  else if v.groupReady name then "ready"
+  else if !(v.groupWork name).isEmpty then "blocked"
+  else ""
+
 def groupJson (v : View) (name : String) : Json :=
   let c := v.counts name
-  let g := v.plan.group? name
   Json.mkObj [
-    ("group", name), ("kind", toJson (g.map (·.kind))), ("title", toJson (g.map (·.title))),
-    ("parent", toJson (v.plan.parent? name)),
+    ("group", name), ("parent", toJson (v.plan.parent? name)),
     ("proved", c.proved), ("stated", c.stated), ("open", c.open), ("axioms", c.axioms),
     ("wrong", c.wrong), ("done", v.groupDone name), ("ready", v.groupReady name)]
 
@@ -86,14 +91,12 @@ def status (v : View) (group? : Option String) (json : Bool) : IO UInt32 := do
     IO.println (Json.mkObj [("groups", toJson groups), ("regressions", toJson regs)]).pretty
     return 0
   noCacheWarning v
-  IO.println s!"{pad "group" 34} {pad "kind" 9} {pad "proved" 7} {pad "stated" 7} {pad "open" 6} {pad "wrong" 6} {pad "axioms" 7} state"
+  IO.println s!"{pad "group" 34} {pad "proved" 7} {pad "stated" 7} {pad "open" 6} {pad "wrong" 6} {pad "axioms" 7} state"
   for (g, depth) in rows do
     let c := v.counts g
-    let kind := (v.plan.group? g).map (·.kind) |>.getD ""
-    let st := if v.groupDone g then "done" else if v.groupReady g then "ready" else if c.total == 0 then "" else "blocked"
     -- the top row in full, the rows under it by the last component: the indentation says the rest
     let name := if depth == 0 then g else "".pushn ' ' (2 * depth) ++ groupStem g
-    IO.println s!"{pad name 34} {pad kind 9} {pad (toString c.proved) 7} {pad (toString c.stated) 7} {pad (toString c.open) 6} {pad (toString c.wrong) 6} {pad (toString c.axioms) 7} {st}"
+    IO.println s!"{pad name 34} {pad (toString c.proved) 7} {pad (toString c.stated) 7} {pad (toString c.open) 6} {pad (toString c.wrong) 6} {pad (toString c.axioms) 7} {v.groupState g}"
   -- wrong nodes and regressions
   let wrongs := v.plan.nodes.toArray.filterMap fun (_, n) =>
     if let some w := n.wrong then some (n, w) else none
@@ -115,27 +118,24 @@ def status (v : View) (group? : Option String) (json : Bool) : IO UInt32 := do
 
 -- ## ready
 
-def ready (v : View) (kind? : Option String) (all : Bool) (json : Bool) : IO UInt32 := do
-  let kind := kind?.getD "task"
-  let groups := v.plan.groups.filter fun g =>
-    (all || g.kind == kind) && v.groupReady g.name
+def ready (v : View) (json : Bool) : IO UInt32 := do
+  let groups := v.plan.groups.filter fun g => v.groupReady g.name
   if json then
     IO.println (toJson (groups.map fun g =>
-      Json.mkObj [("group", g.name), ("kind", g.kind), ("title", g.title),
-        ("module", toJson (g.module.map (·.toString))),
-        ("nodes", toJson ((v.groupNodes g.name).filterMap fun n =>
+      Json.mkObj [("group", g.name), ("desc", v.groupDesc g),
+        ("nodes", toJson (g.nodes.filterMap fun n =>
           if v.state n.id != .proved then some (n.id.toString) else none))])).pretty
     return 0
   noCacheWarning v
   if groups.isEmpty then
-    IO.println (if all then "no ready groups" else s!"no ready groups of kind '{kind}' (try --all)")
+    IO.println "no ready groups"
     return 0
   for g in groups do
-    let c := v.counts g.name
-    let m := g.module.map (fun m => s!"  {m}") |>.getD ""
-    IO.println s!"{g.name}  [{g.kind}] {g.title}{m}"
+    let c := v.countNodes g.nodes
+    let desc := firstLine (v.groupDesc g)
+    IO.println (if desc.isEmpty then g.name else s!"{g.name}  — {desc}")
     IO.println s!"  {c.open} open, {c.stated} stated, {c.proved} proved"
-    for n in v.groupNodes g.name do
+    for n in g.nodes do
       if v.state n.id != .proved then
         IO.println s!"    {pad (v.state n.id).toString 7} {v.plan.shortId n}  — {firstLine (v.descOf n.id)}"
   return 0
@@ -181,13 +181,19 @@ def showNode (v : View) (n : Node) : IO Unit := do
 
 def showGroup (v : View) (g : Group) : IO Unit := do
   let c := v.counts g.name
-  IO.println s!"{g.name}  [{g.kind}] {g.title}"
-  if let some m := g.module then IO.println s!"  module: {m}"
+  let st := v.groupState g.name
+  let tag := if st.isEmpty then "" else "  [" ++ st ++ "]"
+  let written := if v.groupAttached g then "" else " (not yet written)"
+  IO.println s!"{g.name}{tag}  module {g.module}{written}"
   if let some ns := g.namespace then IO.println s!"  namespace: {ns}"
-  IO.println s!"  {c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms; {if v.groupDone g.name then "done" else if v.groupReady g.name then "ready" else "blocked"}"
-  if let some notes := g.notes then
-    IO.println "\nnotes:"
-    IO.println (indent notes)
+  IO.println s!"  {c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms"
+  let desc := v.groupDesc g
+  if !desc.isEmpty then
+    IO.println ""
+    IO.println (indent desc)
+    if (v.moduleDoc? g).isSome then
+      if let some d := g.desc then
+        IO.println (indent s!"(from the module's doc comment; the plan's desc is superseded: {firstLine d})")
   let kids := v.children.getD g.name #[]
   if !kids.isEmpty then
     IO.println "\ngroups:"
@@ -214,7 +220,7 @@ def «show» (v : View) (target : String) : IO UInt32 := do
   if let some n := v.plan.node? id then
     showNode v n
     return 0
-  -- a trailing part: of a group name (`odd` for `numbers/odd`) or of a node id
+  -- a trailing part: of a group name (`Odd` for `Numbers/Odd`) or of a node id
   let groups := v.plan.groups.filter fun g => g.name.endsWith ("/" ++ target)
   let nodes := v.plan.nodes.toArray.filter fun (k, _) => k.toString.endsWith ("." ++ target)
   match groups, nodes with
@@ -235,7 +241,18 @@ def lint (v : View) : IO UInt32 := do
   if let some cyc := v.suggestedCycle then
     errors := errors.push s!"cycle among suggested dependencies: {String.intercalate " → " (cyc.map (·.toString))}"
   for g in v.plan.groups do
-    if isBlank g.kind then errors := errors.push s!"{g.path}: empty kind"
+    -- the group's description: the plan's `desc` until the module has a doc comment
+    if let some d := g.desc then
+      if isBlank d then errors := errors.push s!"{g.path}: empty desc"
+    if v.cache.isSome then
+      let attached := v.groupAttached g
+      let hasDoc := (v.moduleDoc? g).isSome
+      if !attached && g.desc.isNone then
+        errors := errors.push s!"{g.path}: the module is not yet written and the group has no desc"
+      if attached && !hasDoc && g.desc.isNone then
+        warnings := warnings.push s!"{g.path}: neither a desc nor a module doc comment"
+      if hasDoc && g.desc.isSome then
+        warnings := warnings.push s!"{g.path}: desc is superseded by the module's doc comment; remove it"
     for n in g.nodes do
       if let some w := n.wrong then
         if isBlank w then errors := errors.push s!"{g.path}:{n.line}: {n.id} is marked wrong without a reason"
@@ -252,8 +269,8 @@ def lint (v : View) : IO UInt32 := do
           warnings := warnings.push s!"{g.path}:{n.line}: {n.id}: desc is superseded by its doc comment; remove it"
         if v.state n.id == .proved && !n.deps.isEmpty then
           warnings := warnings.push s!"{g.path}:{n.line}: {n.id}: deps is superseded by the real dependencies; remove it"
-      if v.cache.isSome && n.kind.isNone && !((v.decl[n.id]?.map (·.found)).getD false) then
-        errors := errors.push s!"{g.path}:{n.line}: {n.id} is open and has no kind"
+        if n.kind.isNone && !attached then
+          errors := errors.push s!"{g.path}:{n.line}: {n.id} is open and has no kind"
       if let some d := v.decl[n.id]? then
         if d.found then
           match n.kind with
@@ -270,11 +287,9 @@ def lint (v : View) : IO UInt32 := do
           | none => pure ()
           if d.isAxiom then
             errors := errors.push s!"{g.path}:{n.line}: {n.id} is an axiom"
-          match g.module, d.module with
-          | some gm, some dm =>
-            if gm != dm then
-              warnings := warnings.push s!"{g.path}:{n.line}: {n.id} lives in {dm}, group says {gm}"
-          | _, _ => pure ()
+          if let some dm := d.module then
+            if dm != g.module then
+              warnings := warnings.push s!"{g.path}:{n.line}: {n.id} lives in {dm}, not in {g.module}"
   for e in errors do IO.println s!"error: {e}"
   for w in warnings do IO.println s!"warning: {w}"
   if errors.isEmpty && warnings.isEmpty then IO.println "ok"
@@ -301,9 +316,7 @@ def graphJson (v : View) (under? : Option String) : Json :=
       ("from", id.toString), ("to", d.toString),
       ("real", real.contains d), ("suggested", sugg.contains d)]
   let groupJson := groups.filterMap fun g => (v.plan.group? g).map fun g => Json.mkObj [
-    ("name", g.name), ("kind", g.kind), ("title", g.title),
-    ("parent", toJson (v.plan.parent? g.name)),
-    ("module", toJson (g.module.map (·.toString))),
+    ("name", g.name), ("parent", toJson (v.plan.parent? g.name)), ("desc", v.groupDesc g),
     ("done", v.groupDone g.name), ("ready", v.groupReady g.name)]
   Json.mkObj [("groups", toJson groupJson), ("nodes", toJson nodeJson), ("edges", toJson edges)]
 
@@ -317,7 +330,7 @@ def graphDot (v : View) (under? : Option String) : String := Id.run do
   let mut out := "digraph tracker {\n  rankdir=BT;\n  node [shape=box, fontsize=10];\n"
   for g in groups do
     if let some grp := v.plan.group? g then
-      out := out ++ s!"  subgraph \"cluster_{g}\" \{\n    label=\"{dotEscape grp.title}\";\n"
+      out := out ++ s!"  subgraph \"cluster_{g}\" \{\n    label=\"{dotEscape g}\";\n"
       for n in grp.nodes do
         let color := match v.state n.id with
           | .proved => "palegreen" | .stated => "khaki" | .wrong => "lightcoral"

@@ -1,4 +1,4 @@
-import Example.Parity
+import Numbers.Parity
 
 /-!
 # A refuted proposal
@@ -7,7 +7,7 @@ The plan proposed "every natural number is even". It is false, and the plan reco
 counterexample.
 -/
 
-namespace Example
+namespace Numbers
 
 /-- The proposition the plan proposed: every natural number is even. -/
 def everyEven : Prop := ∀ n, IsEven n
@@ -17,4 +17,4 @@ theorem not_everyEven : ¬ everyEven := fun h => by
   obtain ⟨k, hk⟩ := h 1
   omega
 
-end Example
+end Numbers

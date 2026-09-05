@@ -49,17 +49,16 @@ private def decodeNode (group : String) (ns : Option Name) (ictx : Parser.InputC
 open Toml in
 private def decodeGroup (name : String) (path : System.FilePath) (ictx : Parser.InputContext)
     (t : Lake.Toml.Table) : Lake.Toml.EDecodeM Group := do
-  let kind := (← str? t `kind).getD "task"
-  let title := (← str? t `title).getD (groupStem name)
-  let module ← name? t `module
   let ns ← name? t `namespace
-  let notes ← str? t `notes
+  let desc ← match ← str? t `desc with
+    | some d => pure (some d)
+    | none => str? t `description
   let mut nodes : Array Node := #[]
   -- one bad node does not hide the others: errors accumulate, decoding goes on
   for (nt, ref) in ← tables t `node do
     if let some n ← recover (decodeNode name ns ictx nt ref) then
       nodes := nodes.push n
-  return { name, kind, title, module, «namespace» := ns, notes, nodes, path }
+  return { name, «namespace» := ns, desc, nodes, path }
 
 /-- Load one group file: its errors, and the group if it could be decoded at all. -/
 def loadGroup (name : String) (path : System.FilePath) : IO (Array String × Option Group) := do

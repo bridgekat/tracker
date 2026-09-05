@@ -8,7 +8,7 @@ structure Args where
   positional : Array String := #[]
   flags : Std.HashMap String String := {}
 
-def valueFlags : List String := ["dir", "root", "kind", "roots", "under"]
+def valueFlags : List String := ["dir", "root", "roots", "under"]
 
 def parseArgs (args : List String) : Args := Id.run do
   let mut a : Args := {}
@@ -38,7 +38,7 @@ usage: tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <
 
   check [--force]                   make the cache fresh: import the project, resolve every id
   status [group] [--json]           counts per group, rolled up through parents; regressions
-  ready [--kind K | --all] [--json] groups whose outside dependencies are all proved
+  ready [--json]                    groups whose outside dependencies are all proved
   show <group|id>                   the brief for a group, or everything about one node
   lint                              plan errors, cycles, placement and kind mismatches
   graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
@@ -149,7 +149,7 @@ unsafe def run (a : Args) : IO UInt32 := do
       for r in cache.regressions do IO.println s!"  {r.id}: {r.before} → {r.after}"
     return 0
   | "status" => status v a.positional[1]? (a.flags.contains "json")
-  | "ready" => ready v (a.flags.get? "kind") (a.flags.contains "all") (a.flags.contains "json")
+  | "ready" => ready v (a.flags.contains "json")
   | "show" =>
     let some target := a.positional[1]? | return 2
     «show» v target

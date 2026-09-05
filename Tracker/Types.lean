@@ -14,6 +14,10 @@ namespace Tracker
 /-- A 64-bit hash as hex, the form Lake's `.olean.hash` files use. -/
 def hex (h : UInt64) : String := String.ofList (Nat.toDigits 16 h.toNat)
 
+/-- Without leading and trailing whitespace. -/
+def trim (s : String) : String :=
+  String.ofList ((s.toList.dropWhile Char.isWhitespace).reverse.dropWhile Char.isWhitespace).reverse
+
 /-- A node is a definition or a theorem. -/
 inductive NodeKind where
   | definition
@@ -59,23 +63,24 @@ structure Node where
   rawDeps : Array String := #[]
   deriving Inhabited
 
-/-- One group file. -/
+/-- One group file: the plan for one module. -/
 structure Group where
-  /-- The file's path under the plan directory without `.toml`, with `/` between components:
-  `numbers/odd` for `numbers/odd.toml`. How the group is referred to everywhere. The directory
-  of the same name beside the file holds the group's children. -/
+  /-- The file's path under the plan directory without `.toml`, with `/` between components,
+  which is the module's path too: `Numbers/Odd` for `Numbers/Odd.toml`, the plan for
+  `Numbers.Odd`. How the group is referred to everywhere. The directory of the same name beside
+  the file holds the group's children. -/
   name : String
-  /-- `task`, `section`, `chapter`, `module`, or any other word. -/
-  kind : String := "task"
-  title : String := ""
-  /-- The module the group's declarations should live in. -/
-  module : Option Name := none
   /-- Ids inside the group are resolved relative to this namespace. -/
   «namespace» : Option Name := none
-  notes : Option String := none
+  /-- What the module is for, until it exists and has a doc comment. -/
+  desc : Option String := none
   nodes : Array Node := #[]
   path : System.FilePath := ""
   deriving Inhabited
+
+/-- The module a group is the plan for: `Numbers.Odd` for `Numbers/Odd`. -/
+def Group.module (g : Group) : Name :=
+  (g.name.splitOn "/").foldl (fun n c => Name.str n c) Name.anonymous
 
 /-- All groups, with indexes. `errors` collects everything that went wrong while loading. -/
 structure Plan where
@@ -177,7 +182,7 @@ structure Regression where
   deriving ToJson, FromJson, Inhabited
 
 /-- Bumped whenever the cache's meaning changes; a cache of another version is stale. -/
-def cacheVersion : Nat := 2
+def cacheVersion : Nat := 3
 
 /-- One compiled module of the project, fingerprinted at check time. -/
 structure ModuleRec where
@@ -186,6 +191,8 @@ structure ModuleRec where
   olean : String
   /-- Its fingerprint: Lake's `.olean.hash` beside it, else a hash of the file. -/
   hash : String
+  /-- The first `/-! … -/` block of the module, which supersedes the group's `desc`. -/
+  doc : Option String := none
   deriving ToJson, FromJson, Inhabited
 
 /-- The check cache, `.lake/tracker/check.json` under the project root. -/
