@@ -1,0 +1,27 @@
+# The task in progress: one node is misfiled, one is stated with `sorry`, one is not written yet.
+# Every outside dependency is proved, so `tracker ready` lists it.
+kind = "task"
+title = "Odd numbers"
+parent = "numbers"
+module = "Example.Odd"
+namespace = "Example"
+notes = '''
+Prove the odd-number lemmas from the parity module. `IsEven.add_one_odd` does the same in the
+other direction and is the model to follow.
+'''
+
+# Lives in Example.Parity, not here: `lint` reports the placement mismatch.
+[[node]]
+id = "isOdd_one"
+
+# Stated with `sorry` and documented, so only the suggested dependencies remain useful.
+[[node]]
+id = "IsOdd.add_one_even"
+deps = ["IsOdd", "IsEven"]
+
+[[node]]
+id = "IsOdd.add_odd"
+kind = "theorem"
+desc = 'The sum of two odd numbers is even.'
+deps = ["IsOdd", "IsEven", "IsOdd.add_one_even"]
+source = "Textbook, Proposition 1.2"

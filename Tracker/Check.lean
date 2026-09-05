@@ -66,7 +66,7 @@ def resolveDecl (roots : Array Name) (tracked : Std.HashMap Name Node)
       catch _ => pure ""
     let uses ← reachTracked env roots tracked used id
     let doc := (← findDocString? env id).map fun d =>
-      String.mk (d.toList.reverse.dropWhile Char.isWhitespace).reverse
+      String.ofList (d.toList.reverse.dropWhile Char.isWhitespace).reverse
     return {
       id, found := true
       module := moduleOf env id
@@ -82,7 +82,7 @@ def resolveDecl (roots : Array Name) (tracked : Std.HashMap Name Node)
 def gitCommit (root : System.FilePath) : IO String := do
   try
     let out ← IO.Process.output { cmd := "git", args := #["rev-parse", "--short", "HEAD"], cwd := some root }
-    return if out.exitCode == 0 then String.mk (out.stdout.toList.takeWhile Char.isAlphanum) else ""
+    return if out.exitCode == 0 then String.ofList (out.stdout.toList.takeWhile Char.isAlphanum) else ""
   catch _ => return ""
 
 /-- Import the project and check every node. -/

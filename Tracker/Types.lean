@@ -42,7 +42,7 @@ structure Node where
   desc : Option String := none
   /-- Suggested dependencies, resolved to node ids. -/
   deps : Array Name := #[]
-  /-- Where the statement comes from, e.g. `Rockafellar, Theorem 12.2`. -/
+  /-- Where the statement comes from, e.g. `Textbook, Theorem 1.2`. -/
   source : Option String := none
   /-- Set by hand when the statement was found false or unprovable as stated. -/
   wrong : Option String := none

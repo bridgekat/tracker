@@ -27,6 +27,17 @@ The built executable also runs without the `require`, from the project root, as
 `lake env path/to/tracker/.lake/build/bin/tracker …`. Either way it needs the toolchain's `bin`
 on the path, because it links Lean's shared library.
 
+`examples/` is a small self-contained project with a plan over it, exercising every state and
+every lint:
+
+```
+cd examples
+lake build
+lake exe tracker check
+lake exe tracker status
+lake exe tracker lint
+```
+
 ### Usage
 
 ```
@@ -67,7 +78,7 @@ An edge means `from` depends on `to`; `real` is set when the dependency was read
 per group, nodes filled by state, real edges solid and suggested edges dashed:
 
 ```
-lake exe tracker graph --dot --under rockafellar-part3 | dot -Tsvg -o part3.svg
+lake exe tracker graph --dot --under numbers | dot -Tsvg -o numbers.svg
 ```
 
 ## Plan graph
@@ -133,21 +144,21 @@ landed in the wrong file is reported without anyone looking for it.
 One TOML file per group, in the plan directory. The file stem is the group's name.
 
 ```toml
-kind = "task"                                     # default "task"
-title = "Conjugates of improper functions"        # default: the file stem
-parent = "duality"                                # optional
-module = "Tdaf.Analysis.Convex.Duality.Improper"  # optional
-namespace = "Tdaf.ConvexAnalysis"                 # ids below are relative to this; optional
+kind = "task"                          # default "task"
+title = "Odd numbers"                  # default: the file stem
+parent = "numbers"                     # optional
+module = "Example.Odd"                 # optional
+namespace = "Example"                  # ids below are relative to this; optional
 notes = '''
 Anything a sub-agent should read before starting.
 '''
 
 [[node]]
-id = "conj_eq_top_of_exists_eq_bot"               # the Lean identifier, relative to namespace
-kind = "theorem"                                  # definition | theorem; until the declaration exists
-desc = 'If f takes the value -∞ anywhere, then f* is identically +∞.'   # until a doc comment exists
-deps = ["conj", "conj_bot"]                       # suggested dependencies, by id; until proved
-source = "Rockafellar, §12"                       # optional
+id = "IsOdd.add_odd"                   # the Lean identifier, relative to namespace
+kind = "theorem"                       # definition | theorem; until the declaration exists
+desc = 'The sum of two odd numbers is even.'   # until a doc comment exists
+deps = ["IsOdd", "IsEven", "IsOdd.add_one_even"]   # suggested dependencies, by id; until proved
+source = "Textbook, Proposition 1.2"   # optional
 # wrong = 'why the statement is false or unprovable as stated'   # optional, hand-set
 ```
 
@@ -161,8 +172,7 @@ accepted for `kind`, and `description` for `desc`.
 
 Write descriptions as literal strings (`'…'` or `'''…'''`), so that `\` and `"` need no
 escaping. A new node is a block appended after a blank line, which is why the files merge
-cleanly under git. `examples/tdaf/` is a small plan over the `tdaf` library for trying the
-commands.
+cleanly under git. `examples/tracker/` is the plan of the example project.
 
 ## Workflow
 

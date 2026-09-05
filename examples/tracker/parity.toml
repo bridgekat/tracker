@@ -1,0 +1,31 @@
+# Finished: kinds, doc comments and real dependencies are read from the library, so the nodes
+# keep only their id. One declaration has no doc comment and keeps its description.
+kind = "module"
+title = "Parity"
+parent = "numbers"
+module = "Example.Parity"
+namespace = "Example"
+
+[[node]]
+id = "IsEven"
+
+[[node]]
+id = "IsOdd"
+
+[[node]]
+id = "isEven_zero"
+
+[[node]]
+id = "isEven_two_mul"
+desc = 'Twice any natural number is even.'
+
+# Deliberately kept with `desc` and `deps` although it is proved and documented, so that `lint`
+# reports both as superseded and `show` reports the suggestion the proof did not use.
+[[node]]
+id = "IsEven.add"
+desc = 'The sum of two even numbers is even.'
+deps = ["IsEven", "isEven_zero"]
+source = "Textbook, Proposition 1.1"
+
+[[node]]
+id = "IsEven.add_one_odd"
