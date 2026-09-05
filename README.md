@@ -100,6 +100,31 @@ dependencies, duplicate ids, missing parents), cycles among suggestions, empty d
 `wrong` without a reason, and, once checked, nodes planned as theorems that are not, nodes that
 are axioms, and declarations that live in a module other than their group's.
 
+## Graph exports
+
+`tracker graph` is the contract for anything that wants a picture; the tracker itself does not
+draw. `--under G` restricts the output to a group and its descendants, which is the only way a
+layout stays readable past a few hundred nodes.
+
+JSON (the default) is one object with three arrays:
+
+| array | fields |
+|---|---|
+| `groups` | `name`, `kind`, `title`, `parent`, `module`, `done`, `ready` |
+| `nodes` | `id`, `group`, `kind`, `state`, `desc`, `source`, `wrong` |
+| `edges` | `from`, `to`, `real`, `suggested` |
+
+An edge means `from` depends on `to`. `real` is set when the dependency was read from the
+proof, `suggested` when it was written in `deps`; both can be set.
+
+DOT (`--dot`) has one cluster per group, nodes filled by state (green proved, yellow stated, red
+wrong, orange axioms, white open), real edges solid and suggested edges dashed. Render it with
+Graphviz:
+
+```
+lake exe tracker graph --dot --under rockafellar-part3 | dot -Tsvg -o part3.svg
+```
+
 ## Layout
 
 ```

@@ -19,7 +19,7 @@ def parseArgs (args : List String) : Args := Id.run do
     | arg :: tl =>
       rest := tl
       if arg.startsWith "--" then
-        let body := String.mk (arg.toList.drop 2)
+        let body := String.ofList (arg.toList.drop 2)
         match body.splitOn "=" with
         | [k, v] => a := { a with flags := a.flags.insert k v }
         | _ =>
