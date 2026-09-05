@@ -1,0 +1,4 @@
+# A chapter is a group with no nodes of its own; its sections name it as parent and its
+# status is the roll-up of theirs.
+kind = "chapter"
+title = "Rockafellar, Part III: Duality Correspondences"

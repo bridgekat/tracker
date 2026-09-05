@@ -1,0 +1,13 @@
+# Blocked: depends on an open node of another task, so `tracker ready` leaves it out until
+# improper-conjugates is proved.
+kind = "task"
+title = "Rockafellar §12, the improper remark"
+module = "Tdaf.Surface.Rockafellar.Part3.Section12"
+namespace = "Rockafellar"
+
+[[node]]
+id = "remark_12_improper"
+kind = "theorem"
+desc = 'The remark after Theorem 12.2: if f is improper, f** is the constant -∞ (on ℝⁿ).'
+source = "Rockafellar, §12, p. 104"
+deps = ["Tdaf.ConvexAnalysis.biconj_eq_bot_of_exists_eq_bot"]

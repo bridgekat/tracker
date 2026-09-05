@@ -8,3 +8,5 @@ name = "Tracker"
 [[lean_exe]]
 name = "tracker"
 root = "Main"
+# The checker imports the target project's modules and may run their initializers.
+supportInterpreter = true

@@ -1,0 +1,49 @@
+# The closure of a convex function. Everything here is finished, so the states come out proved
+# and the real dependencies replace the suggestions.
+kind = "module"
+title = "Closure of a convex function"
+module = "Tdaf.Analysis.Convex.Closure"
+namespace = "Tdaf.ConvexAnalysis"
+
+[[node]]
+id = "lscHull"
+kind = "definition"
+desc = 'The lower semicontinuous hull of f : E → EReal, the function whose epigraph is the closure of epi f.'
+
+[[node]]
+id = "clFn"
+kind = "definition"
+desc = 'The closure cl f of a convex function: the lsc hull, except that it is identically -∞ wherever the lsc hull takes the value -∞.'
+deps = ["lscHull"]
+
+[[node]]
+id = "lscHull_le"
+kind = "theorem"
+desc = 'The lsc hull lies below the function.'
+deps = ["lscHull"]
+
+[[node]]
+id = "clFn_le"
+kind = "theorem"
+desc = 'cl f ≤ f.'
+deps = ["clFn", "lscHull_le"]
+
+[[node]]
+id = "closedFn_clFn"
+kind = "theorem"
+desc = 'cl f is closed.'
+deps = ["clFn"]
+
+[[node]]
+id = "convexFn_clFn"
+kind = "theorem"
+desc = 'If f is convex then so is cl f.'
+deps = ["clFn"]
+
+# Deliberately filed in the wrong group: it lives in Duality/Conjugate. `tracker lint` reports
+# the placement mismatch from the module the environment records for it.
+[[node]]
+id = "biconj_le_clFn"
+kind = "theorem"
+desc = 'f** ≤ cl f for every f.'
+deps = ["clFn"]

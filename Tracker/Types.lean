@@ -1,0 +1,170 @@
+import Lean
+
+/-!
+# Types
+
+The plan (hand-written intent, read from TOML group files) and the cache (derived state, written
+by `tracker check`). Nothing here is computed; see `Tracker.Graph` for that.
+-/
+
+open Lean
+
+namespace Tracker
+
+/-- A node is a definition or a theorem. -/
+inductive NodeKind where
+  | definition
+  | theorem
+  deriving BEq, Repr, Inhabited, DecidableEq
+
+namespace NodeKind
+
+def toString : NodeKind → String
+  | .definition => "definition"
+  | .theorem => "theorem"
+
+instance : ToString NodeKind := ⟨NodeKind.toString⟩
+
+def parse? : String → Option NodeKind
+  | "definition" | "def" => some .definition
+  | "theorem" | "thm" | "lemma" => some .theorem
+  | _ => none
+
+end NodeKind
+
+/-- One `[[node]]` entry of a group file, after id resolution. -/
+structure Node where
+  /-- The fully qualified Lean identifier the declaration has or will have. -/
+  id : Name
+  kind : NodeKind
+  /-- The natural-language statement. -/
+  desc : String
+  /-- Suggested dependencies, resolved to node ids. -/
+  deps : Array Name := #[]
+  /-- Where the statement comes from, e.g. `Rockafellar, Theorem 12.2`. -/
+  source : Option String := none
+  /-- Set by hand when the statement was found false or unprovable as stated. -/
+  wrong : Option String := none
+  /-- The group (file stem) this node belongs to. -/
+  group : String := ""
+  /-- Line of the `[[node]]` header in the group file, for messages. -/
+  line : Nat := 0
+  /-- The id as written, before namespace resolution. -/
+  rawId : String := ""
+  /-- The dependencies as written, before resolution. -/
+  rawDeps : Array String := #[]
+  deriving Inhabited
+
+/-- One group file. -/
+structure Group where
+  /-- The file stem; how the group is referred to everywhere. -/
+  name : String
+  /-- `task`, `section`, `chapter`, `module`, or any other word. -/
+  kind : String := "task"
+  title : String := ""
+  parent : Option String := none
+  /-- The module the group's declarations should live in. -/
+  module : Option Name := none
+  /-- Ids inside the group are resolved relative to this namespace. -/
+  «namespace» : Option Name := none
+  notes : Option String := none
+  nodes : Array Node := #[]
+  path : System.FilePath := ""
+  deriving Inhabited
+
+/-- All groups, with indexes. `errors` collects everything that went wrong while loading. -/
+structure Plan where
+  groups : Array Group := #[]
+  nodes : Std.HashMap Name Node := {}
+  groupIdx : Std.HashMap String Nat := {}
+  errors : Array String := #[]
+
+def Plan.group? (p : Plan) (name : String) : Option Group :=
+  p.groupIdx[name]? >>= fun i => p.groups[i]?
+
+def Plan.node? (p : Plan) (id : Name) : Option Node := p.nodes[id]?
+
+/-- The state of a node, derived from the compiled library except for `wrong`. -/
+inductive NodeState where
+  /-- The id does not resolve; the node is a plan. -/
+  | «open»
+  /-- The declaration exists and depends on `sorry`. -/
+  | stated
+  /-- The declaration exists, no `sorry`, standard axioms only. -/
+  | proved
+  /-- The declaration exists and depends on an axiom outside the standard three. -/
+  | axioms
+  /-- The `wrong` field is set. -/
+  | wrong
+  deriving BEq, Repr, Inhabited, DecidableEq
+
+namespace NodeState
+
+def toString : NodeState → String
+  | .«open» => "open"
+  | .stated => "stated"
+  | .proved => "proved"
+  | .axioms => "axioms"
+  | .wrong => "wrong"
+
+instance : ToString NodeState := ⟨NodeState.toString⟩
+
+def parse? : String → Option NodeState
+  | "open" => some .«open»
+  | "stated" => some .stated
+  | "proved" => some .proved
+  | "axioms" => some .axioms
+  | "wrong" => some .wrong
+  | _ => none
+
+/-- Progress order, for regression detection. `wrong` is outside the order. -/
+def rank : NodeState → Nat
+  | .«open» => 0
+  | .stated => 1
+  | .axioms => 2
+  | .proved => 3
+  | .wrong => 0
+
+end NodeState
+
+/-- What `tracker check` learned about one id. -/
+structure DeclInfo where
+  id : Name
+  found : Bool := false
+  module : Option Name := none
+  line : Option Nat := none
+  isTheorem : Bool := false
+  isAxiom : Bool := false
+  hasSorry : Bool := false
+  axioms : Array Name := #[]
+  axiomsOk : Bool := false
+  /-- Tracked ids reachable from the declaration through untracked project constants. -/
+  uses : Array Name := #[]
+  signature : String := ""
+  deriving ToJson, FromJson, Inhabited
+
+structure StateRec where
+  id : Name
+  state : String
+  deriving ToJson, FromJson, Inhabited
+
+structure Regression where
+  id : Name
+  before : String
+  after : String
+  deriving ToJson, FromJson, Inhabited
+
+/-- The check cache, `.lake/tracker/check.json` under the project root. -/
+structure Cache where
+  version : Nat := 1
+  commit : String := ""
+  roots : Array Name := #[]
+  decls : Array DeclInfo := #[]
+  states : Array StateRec := #[]
+  regressions : Array Regression := #[]
+  deriving ToJson, FromJson, Inhabited
+
+/-- The standard axioms a proved node may depend on. -/
+def standardAxioms : List Name := [``propext, ``Classical.choice, ``Quot.sound]
+
+end Tracker
