@@ -9,8 +9,11 @@ id = "IsEven"
 [[node]]
 id = "IsOdd"
 
+# On its way out: `isEven_two_mul` covers it. Nothing in the library says so, so `lint` is where
+# the deprecation shows, on this node and on `IsEven.add`, which still suggests it.
 [[node]]
 id = "isEven_zero"
+deprecated = 'Subsumed by isEven_two_mul, which gives it at k = 0; use that instead.'
 
 [[node]]
 id = "isEven_two_mul"

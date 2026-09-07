@@ -159,6 +159,7 @@ def showNode (v : View) (n : Node) : IO Unit := do
     if let some d := n.desc then IO.println (indent s!"(from the doc comment; the plan's desc is superseded: {firstLine d})")
   if let some s := n.source then IO.println s!"  source: {s}"
   if let some w := n.wrong then IO.println s!"  wrong: {w}"
+  if let some d := n.deprecated then IO.println s!"  deprecated: {d}"
   if let some d := v.decl[n.id]? then
     if d.found then
       IO.println s!"  at {d.module.map (·.toString) |>.getD "?"}:{d.line.map toString |>.getD "?"}"
@@ -206,6 +207,7 @@ def showGroup (v : View) (g : Group) : IO Unit := do
       IO.println s!"  {pad (v.state n.id).toString 7} {pad (v.kindName n.id) 10} {v.plan.shortId n}"
       IO.println (indent (v.descOf n.id) 20)
       if let some w := n.wrong then IO.println (indent s!"wrong: {w}" 20)
+      if let some d := n.deprecated then IO.println (indent s!"deprecated: {d}" 20)
   let outside := v.outsideDeps g.name
   if !outside.isEmpty then
     IO.println "\noutside dependencies:"
@@ -256,6 +258,15 @@ def lint (v : View) : IO UInt32 := do
     for n in g.nodes do
       if let some w := n.wrong then
         if isBlank w then errors := errors.push s!"{g.path}:{n.line}: {n.id} is marked wrong without a reason"
+      -- deprecation is hand-set and read nowhere else: lint is where it surfaces, node and users
+      if let some d := n.deprecated then
+        if isBlank d then
+          errors := errors.push s!"{g.path}:{n.line}: {n.id} is marked deprecated without a reason"
+        else warnings := warnings.push s!"{g.path}:{n.line}: {n.id} is deprecated: {firstLine d}"
+      else
+        for d in n.deps ++ (v.effDeps n.id).filter (!n.deps.contains ·) do
+          if ((v.plan.node? d).bind (·.deprecated)).isSome then
+            warnings := warnings.push s!"{g.path}:{n.line}: {n.id} depends on the deprecated {d}"
       -- descriptions: the plan's `desc` until there is a doc comment, then the doc comment
       if let some d := n.desc then
         if isBlank d then errors := errors.push s!"{g.path}:{n.line}: {n.id} has an empty desc"
@@ -307,7 +318,8 @@ def graphJson (v : View) (under? : Option String) : Json :=
   let nodeJson := nodes.map fun (id, n) => Json.mkObj [
     ("id", id.toString), ("group", n.group), ("kind", toJson ((v.kindOf id).map toString)),
     ("state", (v.state id).toString), ("desc", v.descOf id),
-    ("source", toJson n.source), ("wrong", toJson n.wrong)]
+    ("source", toJson n.source), ("wrong", toJson n.wrong),
+    ("deprecated", toJson n.deprecated)]
   let edges := nodes.flatMap fun (id, n) =>
     let real := v.realDeps id
     let sugg := n.deps

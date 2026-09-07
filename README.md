@@ -57,7 +57,7 @@ check [--force]                   make the cache fresh: import the project, reso
 status [group] [--json]           counts per group, rolled up through parents; regressions
 ready [--json]                    groups whose outside dependencies are all proved
 show <group | id>                 the brief for a group, or everything about one node
-lint                              plan errors, cycles, placement and kind mismatches, superseded fields
+lint                              plan errors, cycles, mismatches, deprecations, superseded fields
 graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
 ```
 
@@ -86,7 +86,7 @@ three arrays:
 | array | fields |
 |---|---|
 | `groups` | `name`, `parent`, `desc`, `done`, `ready` |
-| `nodes` | `id`, `group`, `kind`, `state`, `desc`, `source`, `wrong` |
+| `nodes` | `id`, `group`, `kind`, `state`, `desc`, `source`, `wrong`, `deprecated` |
 | `edges` | `from`, `to`, `real`, `suggested` |
 
 An edge means `from` depends on `to`; `real` is set when the dependency was read from the proof,
@@ -106,7 +106,8 @@ A node is a definition or a theorem. It is named by the fully qualified Lean ide
 declaration has or will have, and described in natural language. The node is *attached* once
 that identifier resolves in the compiled environment; until then it is a plan. A node may cite
 a `source`, such as a numbered result in a book, and may be marked `wrong` by hand when its
-statement was found false or unprovable as stated.
+statement was found false or unprovable as stated, or `deprecated` by hand when it is on its
+way out, the value saying why and what to use instead.
 
 The kind and the description follow the same rule as the dependencies below: the plan's `kind`
 and `desc` are what the tracker has until the declaration exists and, for the description, carries
@@ -116,7 +117,9 @@ finished, documented node needs nothing in the plan but its id.
 
 Renaming a declaration is renaming the node. Correcting a statement is editing the description
 and the Lean under the same name, or renaming if the corrected statement deserves a new name.
-"Wrong" is a state a node passes through, not a new object.
+"Wrong" is a state a node passes through, not a new object. Deprecation is no state at all: a
+deprecated node keeps whatever its declaration says and counts as before, and `lint` is where it
+surfaces, naming the node and everything that still depends on it, until the plan drops it.
 
 ### Dependencies
 
@@ -182,15 +185,17 @@ desc = 'The sum of two odd numbers is even.'   # until a doc comment exists
 deps = ["IsOdd", "IsEven", "IsOdd.add_one_even"]   # suggested dependencies, by id; until proved
 source = "Textbook, Proposition 1.2"   # optional
 # wrong = 'why the statement is false or unprovable as stated'   # optional, hand-set
+# deprecated = 'why it is on its way out and what replaces it'   # optional, hand-set
 ```
 
 `kind` and `desc` are required while the node is open; `kind` is superseded once the
 declaration exists, `desc` once it has a doc comment, and `deps` once the node is proved. The
 group's `desc` is required while its module does not exist, and superseded once the module has
 a doc comment. `lint` says when each can be removed, when an open node or group lacks what it
-needs, when a planned kind disagrees with the declaration, and when an attached node or group
-has neither a `desc` nor a doc comment. Ids resolve like Lean names: relative to the group's
-`namespace` if it has one, otherwise as written, and `_root_.` forces an absolute name. A dependency may name a node of any group,
+needs, when a planned kind disagrees with the declaration, when an attached node or group has
+neither a `desc` nor a doc comment, and which nodes are deprecated and who still depends on
+them. Ids resolve like Lean names: relative to the group's `namespace` if it has one, otherwise
+as written, and `_root_.` forces an absolute name. A dependency may name a node of any group,
 relative first and then absolute, and must name a tracked node. `def`, `thm` and `lemma` are
 accepted for `kind`, and `description` for `desc`. Any other key is an error, so a misspelt
 field or one from an older plan cannot pass unnoticed.

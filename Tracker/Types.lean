@@ -53,6 +53,8 @@ structure Node where
   source : Option String := none
   /-- Set by hand when the statement was found false or unprovable as stated. -/
   wrong : Option String := none
+  /-- Set by hand when the node is on its way out: why, and what to use instead. -/
+  deprecated : Option String := none
   /-- The group (file stem) this node belongs to. -/
   group : String := ""
   /-- Line of the `[[node]]` header in the group file, for messages. -/

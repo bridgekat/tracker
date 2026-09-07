@@ -40,7 +40,7 @@ usage: tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <
   status [group] [--json]           counts per group, rolled up through parents; regressions
   ready [--json]                    groups whose outside dependencies are all proved
   show <group|id>                   the brief for a group, or everything about one node
-  lint                              plan errors, cycles, placement and kind mismatches
+  lint                              plan errors, cycles, mismatches, deprecations
   graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
 
 Every command checks first when the cache is stale, that is when the plan, the project's

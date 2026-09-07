@@ -31,8 +31,8 @@ open Toml in
 private def decodeNode (group : String) (ns : Option Name) (ictx : Parser.InputContext)
     (nt : Lake.Toml.Table) (ref : Syntax) : Lake.Toml.EDecodeM Node := do
   let rawId ← str nt `id ref
-  unknownKeys nt [`id, `kind, `desc, `description, `deps, `source, `wrong]
-    s!"node {rawId} has id, kind, desc, deps, source and wrong"
+  unknownKeys nt [`id, `kind, `desc, `description, `deps, `source, `wrong, `deprecated]
+    s!"node {rawId} has id, kind, desc, deps, source, wrong and deprecated"
   let kind ← match ← str? nt `kind with
     | none => pure none
     | some kindS => match NodeKind.parse? kindS with
@@ -44,8 +44,9 @@ private def decodeNode (group : String) (ns : Option Name) (ictx : Parser.InputC
   let rawDeps ← strArray? nt `deps
   let source ← str? nt `source
   let wrong ← str? nt `wrong
+  let deprecated ← str? nt `deprecated
   return {
-    id := resolveId ns rawId, kind, desc, source, wrong, group := group,
+    id := resolveId ns rawId, kind, desc, source, wrong, deprecated, group := group,
     line := lineOf ictx ref, rawId, rawDeps }
 
 open Toml in
