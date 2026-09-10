@@ -1,0 +1,197 @@
+import Tracker.Types
+import Tracker.Plan
+import Tracker.Graph
+import Tracker.Cache
+import Tracker.Check
+
+/-!
+# `tracker init`
+
+A first plan over a project that has Lean and no plan: one group file per compiled module, one
+node per declaration a plan could name, and then a check, so that the tracker answers at once.
+It runs only into an absent or empty plan directory, and it writes nothing but plan files.
+
+What it writes is a starting point and not a plan: it names every declaration there is, where a
+plan names the ones that matter. Curating it by hand is the point.
+-/
+
+open Lean
+
+namespace Tracker
+
+/-- Whether the plan directory is absent, or has nothing in it. -/
+def planDirEmpty (dir : System.FilePath) : IO Bool := do
+  unless ← dir.pathExists do return true
+  unless ← dir.isDir do return false
+  return (← dir.readDir).isEmpty
+
+/--
+Whether a plan could name this declaration: a definition, an inductive type or a theorem someone
+wrote, and not an axiom, a constructor, a recursor, a projection, or anything the elaborator
+generated beside them.
+-/
+def plannable (id : Name) : CoreM Bool := do
+  let env ← getEnv
+  if id.isInternalDetail || id.hasMacroScopes then return false
+  let some ci := env.find? id | return false
+  unless ci matches .defnInfo .. | .thmInfo .. | .inductInfo .. | .opaqueInfo .. do return false
+  if isAuxRecursor env id || isNoConfusion env id || (← isProjectionFn id) then return false
+  return !(← isAutoDeclOrPrivate_Internal id)
+
+private structure Placed where
+  id : Name
+  /-- The text the declaration was written as, if it was written anywhere. -/
+  range : Option DeclarationRange
+
+private def startsBefore (a b : Position) : Bool :=
+  a.line < b.line || (a.line == b.line && a.column < b.column)
+
+/-- Whether one declaration's text encloses another's, and so was what generated it. -/
+private def encloses (outer inner : DeclarationRange) : Bool :=
+  let le (a b : Position) := !startsBefore b a
+  le outer.pos inner.pos && le inner.endPos outer.endPos
+    && (outer.pos != inner.pos || outer.endPos != inner.endPos)
+
+/--
+The declarations of one module that a plan could name, in source order: the ones written on
+their own. A declaration whose text sits inside another's was generated beside it, as
+`deriving` and `where` generate theirs, and one with no text at all was written nowhere.
+-/
+def moduleDecls (m : Name) : CoreM (Array Name) := do
+  let env ← getEnv
+  let some idx := env.getModuleIdx? m | return #[]
+  let some data := env.header.moduleData[idx.toNat]? | return #[]
+  let mut placed : Array Placed := #[]
+  for id in data.constNames do
+    if ← plannable id then
+      placed := placed.push { id, range := (← findDeclarationRanges? id).map (·.range) }
+  let ranges := placed.filterMap (·.range)
+  let written := placed.filter fun p => match p.range with
+    | some r => !ranges.any (encloses · r)
+    | none => false
+  return (written.qsort fun a b => match a.range, b.range with
+    | some x, some y => startsBefore x.pos y.pos
+    | _, _ => false).map (·.id)
+
+private def nameParts : Name → Option (List String)
+  | .anonymous => some []
+  | .str p s => (nameParts p).map (· ++ [s])
+  | .num .. => none
+
+/--
+The longest namespace every id sits properly inside, if there is one. A namespace is what
+several declarations share, so one declaration infers none: its own prefix is evidence of
+nothing, and is as often a type's namespace as the module's.
+-/
+def commonNamespace (ids : Array Name) : Option Name := Id.run do
+  if ids.size < 2 then return none
+  let mut common : Option (List String) := none
+  for id in ids do
+    let some parts := nameParts id | return none
+    let above := parts.dropLast
+    common := some <| match common with
+      | none => above
+      | some c => ((c.zip above).takeWhile fun p => p.1 == p.2).map (·.1)
+  match common with
+  | some (p :: ps) => return some ((p :: ps).foldl Name.str .anonymous)
+  | _ => return none
+
+/-- How to write an id under a namespace so that the plan reads it back as itself, if it can. -/
+def idRef (ns : Option Name) (id : Name) : Option String :=
+  let relative := match ns with
+    | some ns => if ns.isPrefixOf id then [(id.replacePrefix ns .anonymous).toString] else []
+    | none => [id.toString]
+  (relative ++ ["_root_." ++ id.toString]).find? fun raw => resolveId ns raw == id
+
+/-- A TOML basic string. -/
+private def quoted (s : String) : String :=
+  "\"" ++ ((s.replace "\\" "\\\\").replace "\"" "\\\"") ++ "\""
+
+/--
+The text of one group file: where it came from, the namespace the ids are relative to, and a
+`[[node]]` per declaration. Nothing else: a node whose declaration exists takes its kind, its
+description and its dependencies from the library, so an id is all the plan has to say.
+-/
+def groupFile (m : Name) (attached : Bool) (ns : Option Name) (refs : Array String) : String :=
+  Id.run do
+    let mut out :=
+      if attached then s!"# Generated by `tracker init` from {m}; curate to the nodes that matter.\n"
+      else s!"# Generated by `tracker init`: {m} is a directory of modules, with none of its own.\n"
+    if let some ns := ns then out := out ++ s!"namespace = {quoted ns.toString}\n"
+    unless attached do out := out ++ s!"desc = 'TODO: what the modules under {m} are for.'\n"
+    for r in refs do out := out ++ s!"\n[[node]]\nid = {quoted r}\n"
+    return out
+
+/-- One group file to write. -/
+private structure InitGroup where
+  name : String
+  module : Name
+  /-- Whether the module exists, as against a directory that only holds others. -/
+  attached : Bool
+  ids : Array Name := #[]
+
+/--
+Write a plan over the project and check it. Refuses unless the plan directory is absent or
+empty, so that a plan already there is never touched.
+-/
+unsafe def initPlan (root dir : System.FilePath) (roots : Array Name) (loadExts : Bool) :
+    IO UInt32 := do
+  unless ← planDirEmpty dir do
+    IO.eprintln s!"init: {dir} is not empty; init writes a plan only where there is none"
+    return 1
+  if roots.isEmpty then
+    IO.eprintln "no root modules; pass --roots A,B or add a lean_lib to lakefile.toml"
+    return 1
+  let env ← importProject roots loadExts
+  let modules := (env.allImportedModuleNames.filter (isProjectModule roots)).qsort
+    (·.toString < ·.toString)
+  let mut groups : Array InitGroup := #[]
+  for m in modules do
+    let ids ← runCore env (moduleDecls m)
+    groups := groups.push { name := moduleGroup m, module := m, attached := true, ids }
+  -- a directory holds the children of the group file beside it, which must exist; a module of
+  -- its own it need not have
+  let named : Std.HashSet String := groups.foldl (init := {}) fun s g => s.insert g.name
+  let mut extra : Array InitGroup := #[]
+  for g in groups do
+    let mut above := groupEnclosing? g.name
+    while true do
+      match above with
+      | none => break
+      | some p =>
+        if !named.contains p && !extra.any (·.name == p) then
+          extra := extra.push { name := p, module := groupModule p, attached := false }
+        above := groupEnclosing? p
+  let files := (groups ++ extra).qsort (·.name < ·.name)
+  IO.FS.createDirAll dir
+  let mut nodes := 0
+  let mut dropped : Array Name := #[]
+  for g in files do
+    let ns := commonNamespace g.ids
+    let mut refs : Array String := #[]
+    for id in g.ids do
+      match idRef ns id with
+      | some r => refs := refs.push r
+      | none => dropped := dropped.push id
+    nodes := nodes + refs.size
+    let path := ((g.name.splitOn "/").foldl (· / ·) dir).addExtension "toml"
+    if let some d := path.parent then IO.FS.createDirAll d
+    IO.FS.writeFile path (groupFile g.module g.attached ns refs)
+  if !dropped.isEmpty then
+    IO.eprintln s!"warning: left out {dropped.size} declaration(s) a plan cannot name: \
+      {dropped.extract 0 3}"
+  IO.println s!"wrote {files.size} group files under {dir}: {nodes} nodes over {modules.size} modules"
+  -- the cache, from the environment already imported
+  let plan ← loadPlan dir
+  for e in plan.errors do IO.eprintln s!"error: {e}"
+  let cache ← checkEnv env plan roots loadExts none
+  writeCache root cache
+  let c := (mkView plan (some cache)).totals
+  IO.println s!"{c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, \
+    {c.axioms} axioms; cache written to {cachePath root}"
+  IO.println "the plan names every declaration the build has, which is not yet a plan: curate it"
+  IO.println "to the declarations that matter, and `tracker lint` will name what is left without"
+  IO.println "a description."
+  return if plan.errors.isEmpty then 0 else 1
+
+end Tracker

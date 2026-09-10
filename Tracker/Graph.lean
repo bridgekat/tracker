@@ -165,6 +165,11 @@ def countNodes (v : View) (ns : Array Node) : Counts :=
 /-- Counts over the group and its descendants. -/
 def counts (v : View) (name : String) : Counts := v.countNodes (v.groupNodes name)
 
+/-- Counts over the whole plan: every root group, and so every node. -/
+def totals (v : View) : Counts :=
+  v.countNodes (v.plan.groups.flatMap fun g =>
+    if (v.plan.parent? g.name).isNone then v.groupNodes g.name else #[])
+
 /-- Done when every node in the subtree is proved (and there is at least one). -/
 def groupDone (v : View) (name : String) : Bool :=
   let ns := v.groupNodes name

@@ -77,9 +77,8 @@ def resolveDecl (roots : Array Name) (tracked : Std.HashMap Name Node)
       axiomsOk := axioms.all fun a => standardAxioms.contains a
       uses, signature := sig, doc }
 
-/-- Import the project and check every node. -/
-unsafe def runCheck (plan : Plan) (roots : Array Name)
-    (loadExts : Bool) (previous : Option Cache) : IO Cache := do
+/-- Import the project's root modules, running their initializers unless `loadExts` is false. -/
+unsafe def importProject (roots : Array Name) (loadExts : Bool) : IO Environment := do
   initSearchPath (← findSysroot)
   enableInitializersExecution
   let t0 ← IO.monoMsNow
@@ -87,14 +86,22 @@ unsafe def runCheck (plan : Plan) (roots : Array Name)
     (loadExts := loadExts)
   let t1 ← IO.monoMsNow
   IO.eprintln s!"imported {roots} in {t1 - t0} ms ({env.allImportedModuleNames.size} modules)"
+  return env
+
+/-- Run a `CoreM` against an imported environment. -/
+def runCore (env : Environment) (x : CoreM α) (ns : Name := .anonymous) : IO α := do
+  let ctx : Core.Context := { fileName := "<tracker>", fileMap := default, currNamespace := ns }
+  return (← x.toIO ctx { env }).1
+
+/-- Check every node against an environment the project was imported into. -/
+def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
+    (loadExts : Bool) (previous : Option Cache) : IO Cache := do
+  let t1 ← IO.monoMsNow
   let used ← IO.mkRef ({} : Std.HashMap Name (Array Name))
   let ids := plan.nodes.toArray.map (·.1) |>.qsort (·.toString < ·.toString)
   let mut decls : Array DeclInfo := #[]
   for id in ids do
-    let ctx : Core.Context := {
-      fileName := "<tracker>", fileMap := default, currNamespace := id.getPrefix }
-    let (d, _) ← (resolveDecl roots plan.nodes used id).toIO ctx { env }
-    decls := decls.push d
+    decls := decls.push (← runCore env (resolveDecl roots plan.nodes used id) id.getPrefix)
   let t2 ← IO.monoMsNow
   IO.eprintln s!"resolved {ids.size} ids in {t2 - t1} ms"
   -- the project's modules: fingerprinted, so that later commands can tell when the build
@@ -121,5 +128,10 @@ unsafe def runCheck (plan : Plan) (roots : Array Name)
       else none
     | _, _ => none
   return { cache with states, regressions }
+
+/-- Import the project and check every node. -/
+unsafe def runCheck (plan : Plan) (roots : Array Name)
+    (loadExts : Bool) (previous : Option Cache) : IO Cache := do
+  checkEnv (← importProject roots loadExts) plan roots loadExts previous
 
 end Tracker

@@ -26,6 +26,7 @@ path = "tools/tracker"
 
 ```
 lake build                 # the tracker reads oleans, so build first
+lake exe tracker init      # no plan yet? write a first one from the declarations there are
 lake exe tracker check     # import the project, resolve every id, write the cache
 lake exe tracker status    # every command does the same first when the cache is stale
 ```
@@ -53,6 +54,7 @@ lake exe tracker lint
 ```
 tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <command> [args]
 
+init                              write a first plan from the project's own declarations
 check [--force]                   make the cache fresh: import the project, resolve every id
 status [group] [--json]           counts per group, rolled up through parents; regressions
 ready [--json]                    groups whose outside dependencies are all proved
@@ -69,10 +71,22 @@ directory, `Numbers/Odd`, or by an unambiguous trailing part of it, `Odd`; `show
 node id, in full or by an unambiguous suffix. `lint` exits non-zero on errors, and no check runs
 while the plan has any.
 
+`init` is for a project that has Lean but no plan. It writes one group file per compiled module,
+a node for every declaration written on its own there, and then checks, so that the other
+commands answer at once; it refuses unless the plan directory is absent or empty, and it writes
+nothing but plan files. What it writes is a starting point and not a plan: it names every
+declaration there is, where a plan names the ones that matter, so curate it by hand — drop the
+nodes not worth tracking, and `lint` names those left without a description. Left out are axioms,
+private declarations, and whatever the elaborator generated beside a declaration instead of
+someone writing it: constructors, recursors, projections, `deriving` instances, `where` helpers.
+A directory whose module does not exist gets a group file with a `TODO` description, since a
+group that stands for nothing yet needs one.
+
 The cache is `<root>/.lake/tracker/check.json`. It is never committed, and the tracker never
-edits plan files. Every command checks first when the cache is stale: when the plan, the
-project's compiled modules, the root modules, the options, or the cache format changed since it
-was written, all judged by content hashes and never by timestamps. `check` is that step alone,
+edits a plan file: `init` writes them where there are none, and nothing else touches them.
+Every command but `init` checks first when the cache is stale: when the plan, the project's
+compiled modules, the root modules, the options, or the cache format changed since it was
+written, all judged by content hashes and never by timestamps. `check` is that step alone,
 and does nothing unless the cache is stale or `--force` is given; `--no-check` answers from the
 cache as it is. The tracker reads oleans and never builds, so an edit that has not been built is
 invisible to it: build first.

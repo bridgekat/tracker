@@ -80,9 +80,18 @@ structure Group where
   path : System.FilePath := ""
   deriving Inhabited
 
+/-- The module a group name is the plan for: `Numbers.Odd` for `Numbers/Odd`. -/
+def groupModule (name : String) : Name :=
+  (name.splitOn "/").foldl (fun n c => Name.str n c) Name.anonymous
+
+/-- The group name a module's plan has: `Numbers/Odd` for `Numbers.Odd`. -/
+def moduleGroup : Name → String
+  | .str p s => let q := moduleGroup p; if q.isEmpty then s else q ++ "/" ++ s
+  | .num p n => let q := moduleGroup p; if q.isEmpty then toString n else q ++ "/" ++ toString n
+  | .anonymous => ""
+
 /-- The module a group is the plan for: `Numbers.Odd` for `Numbers/Odd`. -/
-def Group.module (g : Group) : Name :=
-  (g.name.splitOn "/").foldl (fun n c => Name.str n c) Name.anonymous
+def Group.module (g : Group) : Name := groupModule g.name
 
 /-- All groups, with indexes. `errors` collects everything that went wrong while loading. -/
 structure Plan where

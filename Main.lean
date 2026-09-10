@@ -36,6 +36,7 @@ tracker — progress tracker for Lean formalization projects
 
 usage: tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <command> [args]
 
+  init                              write a first plan from the project's own declarations
   check [--force]                   make the cache fresh: import the project, resolve every id
   status [group] [--json]           counts per group, rolled up through parents; regressions
   ready [--json]                    groups whose outside dependencies are all proved
@@ -43,8 +44,8 @@ usage: tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <
   lint                              plan errors, cycles, mismatches, deprecations
   graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
 
-Every command checks first when the cache is stale, that is when the plan, the project's
-oleans, the root modules or the options changed since it was written.
+Every command but `init` checks first when the cache is stale, that is when the plan, the
+project's oleans, the root modules or the options changed since it was written.
 
   --root DIR   project root (default: current directory)
   --dir DIR    directory of group files (default: <root>/plans)
@@ -52,7 +53,7 @@ oleans, the root modules or the options changed since it was written.
   --no-exts    skip the imported modules' initializers; printed signatures lose their notation
   --no-check   answer from the cache as it is, even if stale"
 
-def commands : List String := ["check", "status", "ready", "show", "lint", "graph"]
+def commands : List String := ["init", "check", "status", "ready", "show", "lint", "graph"]
 
 /-- Root modules from the project's `lakefile.toml`. -/
 def rootsFromLakefile (root : System.FilePath) : IO (Array Name) := do
@@ -121,13 +122,15 @@ unsafe def run (a : Args) : IO UInt32 := do
     return 2
   if cmd == "show" && a.positional[1]?.isNone then
     IO.eprintln "show: give a group name or a node id"; return 2
-  let plan ← loadPlan dir
   let previous ← readCache root
   let roots ← match a.flags.get? "roots" with
     | some r => pure (r.splitOn "," |>.filter (!·.isEmpty) |>.map String.toName |>.toArray)
     | none => rootsFromLakefile root
   let roots := if roots.isEmpty then (previous.map (·.roots)).getD #[] else roots
   let loadExts := !a.flags.contains "no-exts"
+  -- `init` is the one command that runs without a plan: it is the one that writes it
+  if cmd == "init" then return ← initPlan root dir roots loadExts
+  let plan ← loadPlan dir
   let (cache?, ran) ← match ← freshCache root plan previous roots loadExts (cmd == "check")
       (a.flags.contains "force") (a.flags.contains "no-check") with
     | .error code => return code
@@ -136,12 +139,7 @@ unsafe def run (a : Args) : IO UInt32 := do
   match cmd with
   | "check" =>
     let some cache := cache? | IO.eprintln "no cache"; return 1
-    let c := plan.groups.foldl (init := ({} : View.Counts)) fun acc g =>
-      if (plan.parent? g.name).isNone then
-        let gc := v.counts g.name
-        { «open» := acc.open + gc.open, stated := acc.stated + gc.stated, proved := acc.proved + gc.proved,
-          axioms := acc.axioms + gc.axioms, wrong := acc.wrong + gc.wrong }
-      else acc
+    let c := v.totals
     let tail := if ran then s!"cache written to {cachePath root}" else "cache is fresh (--force checks anyway)"
     IO.println s!"{c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms; {tail}"
     if ran && !cache.regressions.isEmpty then
