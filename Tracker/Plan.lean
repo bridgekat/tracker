@@ -94,11 +94,9 @@ partial def planFiles (dir : System.FilePath) (above : List String := []) :
 
 /-- Load every module plan under a directory and resolve dependencies. -/
 def loadPlan (dir : System.FilePath) : IO Plan := do
-  unless ← dir.isDir do return { hash := hex 0 }
+  unless ← dir.isDir do return {}
   let mut plan : Plan := {}
-  let mut h : UInt64 := 0
   for (components, f) in ← planFiles dir do
-    h := mixHash h (mixHash (hash components) (← IO.FS.readFile f).hash)
     let (errs, mp?) ← loadModulePlan (planModuleName components) f
     plan := { plan with errors := plan.errors ++ errs }
     if let some mp := mp? then
@@ -137,7 +135,7 @@ def loadPlan (dir : System.FilePath) : IO Plan := do
   for mp in plan.modules do
     for n in mp.nodes do
       if !nodeMap.contains n.id then nodeMap := nodeMap.insert n.id n
-  return { plan with nodes := nodeMap, hash := hex h }
+  return { plan with nodes := nodeMap }
 
 /-- Display a planned node's id relative to its module plan's namespace. -/
 def Plan.shortId (p : Plan) (n : Node) : String :=

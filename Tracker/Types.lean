@@ -99,8 +99,6 @@ structure Plan where
   /-- The index in `modules` of each module plan, by module name. -/
   moduleIdx : Std.HashMap Name Nat := {}
   errors : Array String := #[]
-  /-- A hash of every module plan's file path and content, by which a cache knows it is stale. -/
-  hash : String := ""
 
 /-- The plan of a module, by module name, if it has one. -/
 def Plan.modulePlan? (p : Plan) (m : Name) : Option ModulePlan :=
@@ -152,38 +150,105 @@ def rank : NodeState → Nat
 
 end NodeState
 
+/-- What a declaration is, read from the compiled library. -/
+inductive DeclKind where
+  | definition
+  | theorem
+  | axiom
+  deriving BEq, Repr, Inhabited, DecidableEq
+
+namespace DeclKind
+
+def toString : DeclKind → String
+  | .definition => "definition"
+  | .theorem => "theorem"
+  | .axiom => "axiom"
+
+instance : ToString DeclKind := ⟨DeclKind.toString⟩
+
+def parse? : String → Option DeclKind
+  | "definition" => some .definition
+  | "theorem" => some .theorem
+  | "axiom" => some .axiom
+  | _ => none
+
+end DeclKind
+
+/-- An object of the fields that are present: a field at its default is left out. -/
+def objOmitting (fields : List (String × Option Json)) : Json :=
+  Json.mkObj (fields.filterMap fun (k, v) => v.map (k, ·))
+
+/-- `some` unless the array is empty. -/
+def nonEmpty? (a : Array α) : Option (Array α) := if a.isEmpty then none else some a
+
+/-- The standard axioms a proved node may depend on. -/
+def standardAxioms : List Name := [``propext, ``Classical.choice, ``Quot.sound]
+
 /--
-What `tracker check` learned about one id: a declaration of the project, or a planned node's id
-(which then may not resolve, or may resolve outside the project).
+One entry of the cache: a declaration of the project, or a planned node's id, which may not
+resolve or may resolve to something that is not a declaration (outside the project, private, or
+generated).
 -/
-structure DeclInfo where
+structure CacheEntry where
   id : Name
   /-- Whether it is one of the project's declarations, and not only a planned node's id. -/
-  declaration : Bool := false
-  found : Bool := false
-  /-- The module name of the module the declaration is in. -/
-  module : Option Name := none
+  declaration : Bool := true
+  /-- What the id resolves to; none when it does not resolve. -/
+  kind : Option DeclKind := none
+  /-- The index in `Cache.modules` of the module it is in. -/
+  module : Option Nat := none
   line : Option Nat := none
-  isTheorem : Bool := false
-  isAxiom : Bool := false
-  hasSorry : Bool := false
+  /-- The axioms it rests on, when they are not all standard ones; empty when they are. -/
   axioms : Array Name := #[]
-  axiomsOk : Bool := false
-  /-- Planned nodes reachable from the declaration through unplanned constants of the project:
-  its real dependencies, when it is a planned node. -/
-  uses : Array Name := #[]
-  /-- Declarations and planned nodes reachable from the declaration through the other constants
-  of the project, as indexes into `Cache.decls`. -/
+  /-- The entries reachable from it through the other constants of the project, as indexes into
+  `Cache.entries`: its real dependencies at the finest grain. -/
   refs : Array Nat := #[]
   signature : String := ""
-  /-- The declaration's doc comment, which supersedes the plan's `desc`. -/
+  /-- The doc comment, which supersedes a planned node's `desc`. -/
   doc : Option String := none
-  deriving ToJson, FromJson, Inhabited
+  deriving Inhabited
 
-structure StateRec where
-  id : Name
-  state : String
-  deriving ToJson, FromJson, Inhabited
+namespace CacheEntry
+
+def found (e : CacheEntry) : Bool := e.kind.isSome
+def hasSorry (e : CacheEntry) : Bool := e.axioms.contains ``sorryAx
+
+/-- Its state from the compiled library alone: open when it does not resolve. -/
+def state (e : CacheEntry) : NodeState :=
+  if !e.found then .«open»
+  else if e.hasSorry then .stated
+  else if e.kind == some .axiom || !e.axioms.isEmpty then .axioms
+  else .proved
+
+instance : ToJson CacheEntry where
+  toJson e := objOmitting [
+    ("id", some (toJson e.id)),
+    ("declaration", if e.declaration then none else some (toJson false)),
+    ("kind", e.kind.map (toJson ·.toString)),
+    ("module", e.module.map toJson), ("line", e.line.map toJson),
+    ("axioms", (nonEmpty? e.axioms).map toJson), ("refs", (nonEmpty? e.refs).map toJson),
+    ("signature", if e.signature.isEmpty then none else some (toJson e.signature)),
+    ("doc", e.doc.map toJson)]
+
+instance : FromJson CacheEntry where
+  fromJson? j := do
+    let opt {α} [FromJson α] (k : String) : Except String (Option α) :=
+      match j.getObjVal? k with
+      | .ok v => some <$> fromJson? v
+      | .error _ => pure none
+    let kind ← match ← opt (α := String) "kind" with
+      | some s => match DeclKind.parse? s with
+        | some k => pure (some k)
+        | none => throw s!"unknown kind '{s}'"
+      | none => pure none
+    return {
+      id := ← j.getObjValAs? Name "id"
+      declaration := (← opt "declaration").getD true
+      kind, module := ← opt "module", line := ← opt "line"
+      axioms := (← opt "axioms").getD #[], refs := (← opt "refs").getD #[]
+      signature := (← opt "signature").getD "", doc := ← opt "doc" }
+
+end CacheEntry
 
 structure Regression where
   id : Name
@@ -192,35 +257,37 @@ structure Regression where
   deriving ToJson, FromJson, Inhabited
 
 /-- Bumped whenever the cache's meaning changes; a cache of another version is stale. -/
-def cacheVersion : Nat := 4
+def cacheVersion : Nat := 5
 
-/-- One compiled module of the project, fingerprinted at check time. -/
+/-- A module an entry is in. The project's modules are fingerprinted at check time; a module
+outside the project is only named. -/
 structure ModuleRec where
-  module : Name
-  /-- The olean the module was read from. -/
-  olean : String
-  /-- Its fingerprint: Lake's `.olean.hash` beside it, else a hash of the file. -/
-  hash : String
+  /-- The module name. -/
+  name : Name
+  /-- For a module of the project: the olean it was read from. -/
+  olean : Option String := none
+  /-- For a module of the project: its fingerprint, Lake's `.olean.hash` beside the olean, else
+  a hash of the olean. -/
+  hash : Option String := none
   /-- The first `/-! … -/` block of the module, which supersedes the module plan's `desc`. -/
   doc : Option String := none
   deriving ToJson, FromJson, Inhabited
 
-/-- The check cache, `.lake/tracker/check.json` under the project root. -/
+/--
+The check cache, `.lake/tracker/check.json` under the project root. It records what the compiled
+library says and nothing the plan says, so that editing a module plan needs no new check unless it
+names ids the cache has not resolved.
+-/
 structure Cache where
   version : Nat := cacheVersion
   roots : Array Name := #[]
   loadExts : Bool := true
-  /-- `Plan.hash` of the plan the check ran against. -/
-  planHash : String := ""
+  /-- The project's modules, sorted by module name, then any other module an entry is in. -/
   modules : Array ModuleRec := #[]
-  /-- Every declaration of the project, and every planned node's id, sorted by id. -/
-  decls : Array DeclInfo := #[]
-  /-- The state of every planned node. -/
-  states : Array StateRec := #[]
+  /-- Every declaration of the project, and every planned node's id at check time, sorted by id. -/
+  entries : Array CacheEntry := #[]
+  /-- The planned nodes whose state went down at the check that wrote the cache. -/
   regressions : Array Regression := #[]
   deriving ToJson, FromJson, Inhabited
-
-/-- The standard axioms a proved node may depend on. -/
-def standardAxioms : List Name := [``propext, ``Classical.choice, ``Quot.sound]
 
 end Tracker

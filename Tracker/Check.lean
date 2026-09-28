@@ -1,6 +1,5 @@
 import Tracker.Types
 import Tracker.Plan
-import Tracker.Graph
 import Tracker.Cache
 
 /-!
@@ -93,7 +92,8 @@ structure Reach where
 A search for the constants of `targets` reachable from a constant, passing through the other
 constants of the project and stopping at anything outside it. `memo c`, for a constant `c` passed
 through, is the answer from `c`. The search visits every constant once, which is sound because
-the dependency graph of a consistent environment is acyclic.
+the graph `Reach.used` walks is acyclic: on a cycle, the constant first reached would be
+memoized with a partial answer.
 -/
 structure Closure where
   targets : Std.HashSet Name
@@ -127,10 +127,25 @@ def projectModules (r : Reach) : Array Name := Id.run do
     if p then out := out.push m
   return out
 
-/-- The constants a constant's type and value use. -/
+/--
+The constants a constant uses: those in its type and value, and for an inductive type those in
+its constructors' types, but never itself, its constructors or the other types of its mutual
+block. `ConstantInfo.getUsedConstantsAsSet` has an inductive type use its constructors and a
+constructor use itself, which makes cycles of every inductive type; with those left out the graph
+is acyclic, as the memoized searches need it to be.
+-/
 def used (r : Reach) (c : Name) : Array Name :=
   match r.env.find? c with
-  | some ci => ci.getUsedConstantsAsSet.toArray
+  | some (.inductInfo val) => Id.run do
+    let block := val.all.flatMap fun t => match r.env.find? t with
+      | some (.inductInfo v) => t :: v.ctors
+      | _ => [t]
+    let mut out := val.type.getUsedConstantsAsSet
+    for ctor in val.ctors do
+      if let some ci := r.env.find? ctor then out := out ++ ci.type.getUsedConstantsAsSet
+    return out.toArray.filter (!block.contains ·)
+  | some (.ctorInfo val) => (val.type.getUsedConstantsAsSet.erase c).toArray
+  | some ci => (ci.getUsedConstantsAsSet.erase c).toArray
   | none => #[]
 
 /-- The bit of an axiom in the masks of `axioms`, allocated on first sight. -/
@@ -194,15 +209,14 @@ def reach (r : Reach) (cl : Closure) (start : Name) : IO (Array Name) := do
 end Reach
 
 /--
-Resolve one id. `planned` stops at planned nodes, for the real dependencies; `all` stops at every
-declaration and planned node, for `refs`, which `index` turns into indexes. Runs in `CoreM` for
-ranges and pretty printing.
+Resolve one id: what it is, where, what it rests on, and the entries it refers to through the
+other constants of the project, as ids. Runs in `CoreM` for ranges and pretty printing.
 -/
-def resolveDecl (r : Reach) (planned all : Closure) (index : Std.HashMap Name Nat)
-    (declaration : Bool) (id : Name) : CoreM DeclInfo := do
+def resolveEntry (r : Reach) (all : Closure) (declaration : Bool) (id : Name) :
+    CoreM (CacheEntry × Option Name × Array Name) := do
   let env ← getEnv
   match env.find? id with
-  | none => return { id }
+  | none => return ({ id, declaration }, none, #[])
   | some ci =>
     let axioms ← r.axiomList (← r.axioms id)
     let range ← findDeclarationRanges? id
@@ -210,19 +224,14 @@ def resolveDecl (r : Reach) (planned all : Closure) (index : Std.HashMap Name Na
         let f ← MetaM.run' (PrettyPrinter.ppSignature id)
         pure (f.fmt.pretty 100)
       catch _ => pure ""
-    let uses := sortNames (← r.reach planned id)
-    let refs := ((← r.reach all id).filterMap (index[·]?)).qsort (· < ·)
-    let doc := (← findDocString? env id).map trim
-    return {
-      id, declaration, found := true
-      module := r.moduleOf id
+    let kind : DeclKind := if ci.isTheorem then .theorem else if ci.isAxiom then .axiom else .definition
+    let entry : CacheEntry := {
+      id, declaration, kind
       line := range.map (·.range.pos.line)
-      isTheorem := ci.isTheorem
-      isAxiom := ci.isAxiom
-      hasSorry := axioms.contains ``sorryAx
-      axioms
-      axiomsOk := axioms.all fun a => standardAxioms.contains a
-      uses, refs, signature := sig, doc }
+      axioms := if axioms.all standardAxioms.contains then #[] else axioms
+      signature := sig
+      doc := (← findDocString? env id).map trim }
+    return (entry, r.moduleOf id, ← r.reach all id)
 
 /-- Import the project's root modules, running their initializers unless `loadExts` is false. -/
 unsafe def importProject (roots : Array Name) (loadExts : Bool) : IO Environment := do
@@ -240,53 +249,66 @@ def runCore (env : Environment) (x : CoreM α) (ns : Name := .anonymous) : IO α
   let ctx : Core.Context := { fileName := "<tracker>", fileMap := default, currNamespace := ns }
   return (← x.toIO ctx { env }).1
 
+/--
+The planned nodes whose state went down since the previous cache. A node marked `wrong` now is
+left out, whatever its declaration did.
+-/
+def regressionsSince (plan : Plan) (previous : Option Cache) (entries : Array CacheEntry) :
+    Array Regression := Id.run do
+  let some p := previous | return #[]
+  let stateOf (es : Array CacheEntry) : Std.HashMap Name NodeState :=
+    es.foldl (init := {}) fun m e => m.insert e.id e.state
+  let before := stateOf p.entries
+  let after := stateOf entries
+  let mut out := #[]
+  for id in sortNames (plan.nodes.fold (init := #[]) fun a id _ => a.push id) do
+    if ((plan.node? id).bind (·.wrong)).isSome then continue
+    let some b := before[id]? | continue
+    let a := after.getD id .«open»
+    if a.rank < b.rank then out := out.push { id, before := b.toString, after := a.toString }
+  return out
+
 /-- Check the declarations and every planned node against an environment the project was
 imported into. -/
 def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
     (loadExts : Bool) (previous : Option Cache) : IO Cache := do
   let t1 ← IO.monoMsNow
   let r ← Reach.init env roots
-  let projectModules := r.projectModules
+  let projectModules := sortNames r.projectModules
   -- the declarations, and the planned nodes beside them, which need not be declarations
   let mut declSet : Std.HashSet Name := {}
   for m in projectModules do
     declSet := declSet.insertMany (← runCore env (moduleDecls m))
   let plannedSet : Std.HashSet Name := plan.nodes.fold (init := {}) fun s id _ => s.insert id
-  let ids := sortNames (declSet.insertMany plannedSet).toArray
+  let targets := declSet.insertMany plannedSet
+  let ids := sortNames targets.toArray
   let index : Std.HashMap Name Nat := ids.foldl (init := {}) fun m id => m.insert id m.size
-  let planned ← Closure.new plannedSet
-  let all ← Closure.new (declSet.insertMany plannedSet)
-  let mut decls : Array DeclInfo := #[]
-  for id in ids do
-    let d ← runCore env (resolveDecl r planned all index (declSet.contains id) id) id.getPrefix
-    decls := decls.push d
-  let t2 ← IO.monoMsNow
-  IO.eprintln s!"resolved {ids.size} ids ({declSet.size} declarations, {plannedSet.size} planned \
-    nodes) in {t2 - t1} ms"
-  -- the project's modules: fingerprinted, so that later commands can tell when the build
-  -- changed, and with the first `/-! … -/` block as the module's description
+  let all ← Closure.new targets
+  -- the project's modules first, fingerprinted so that later commands can tell when the build
+  -- changed, and with the first `/-! … -/` block as the module's description; then any other
+  -- module an entry is in, by name only
   let mut modules : Array ModuleRec := #[]
   for m in projectModules do
     let olean ← findOLean m
     let doc := (getModuleDoc? env m).bind fun ds => ds[0]?.map fun d => trim d.doc
     modules := modules.push {
-      module := m, olean := olean.toString, hash := (← oleanFingerprint olean).getD "", doc }
-  -- states of the planned nodes, and regressions against the previous cache
-  let cache : Cache := { roots, loadExts, planHash := plan.hash, modules, decls }
-  let view := mkView plan (some cache)
-  let states := sortNames (plan.nodes.fold (init := #[]) fun a id _ => a.push id)
-    |>.map fun id => ({ id, state := (view.state id).toString } : StateRec)
-  let prev : Std.HashMap Name String := match previous with
-    | some p => p.states.foldl (init := {}) fun m s => m.insert s.id s.state
-    | none => {}
-  let regressions := states.filterMap fun s =>
-    match prev[s.id]?.bind NodeState.parse?, NodeState.parse? s.state with
-    | some b, some a =>
-      if b != .wrong && a != .wrong && a.rank < b.rank then
-        some ({ id := s.id, before := b.toString, after := a.toString } : Regression)
-      else none
-    | _, _ => none
-  return { cache with states, regressions }
+      name := m, olean := some olean.toString, hash := ← oleanFingerprint olean, doc }
+  let mut moduleIdx : Std.HashMap Name Nat :=
+    modules.foldl (init := {}) fun m rec => m.insert rec.name m.size
+  let mut entries : Array CacheEntry := #[]
+  for id in ids do
+    let (e, m?, refs) ← runCore env (resolveEntry r all (declSet.contains id) id) id.getPrefix
+    let mut module := none
+    if let some m := m? then
+      unless moduleIdx.contains m do
+        moduleIdx := moduleIdx.insert m modules.size
+        modules := modules.push { name := m }
+      module := moduleIdx[m]?
+    entries := entries.push { e with module, refs := (refs.filterMap (index[·]?)).qsort (· < ·) }
+  let t2 ← IO.monoMsNow
+  IO.eprintln s!"resolved {ids.size} ids ({declSet.size} declarations, {plannedSet.size} planned \
+    nodes) in {t2 - t1} ms"
+  return { roots, loadExts, modules, entries, regressions := regressionsSince plan previous entries }
 
 /-- Import the project and check it. -/
 unsafe def runCheck (plan : Plan) (roots : Array Name)

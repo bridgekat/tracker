@@ -48,8 +48,8 @@ usage: tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <
 Modules are named by module name (Numbers.Odd), planned nodes and declarations by id
 (Numbers.IsOdd.add_odd); either may be shortened to an unambiguous trailing part.
 
-Every command checks first when the cache is stale, that is when the module plans, the project's
-oleans, the root modules or the options changed since it was written.
+Every command checks first when the cache is stale, that is when the project's oleans, the root
+modules or the options changed since it was written, or the plan names ids it has not resolved.
 
   --root DIR   project root (default: current directory)
   --dir DIR    directory of module plans (default: <root>/plans)

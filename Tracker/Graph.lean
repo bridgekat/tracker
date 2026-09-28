@@ -20,19 +20,21 @@ namespace Tracker
 structure View where
   plan : Plan
   cache : Option Cache
-  /-- Everything the cache knows, by id: the declarations and the planned nodes' ids. -/
-  decl : Std.HashMap Name DeclInfo := {}
-  /-- The ids of `Cache.decls` in order, which `DeclInfo.refs` index. -/
-  declIds : Array Name := #[]
+  /-- The cache's entries: the declarations and the planned nodes' ids at check time. -/
+  entries : Array CacheEntry := #[]
+  /-- The index in `entries` of each id. -/
+  index : Std.HashMap Name Nat := {}
+  /-- The module names of `Cache.modules`, which `CacheEntry.module` indexes. -/
+  entryModules : Array Name := #[]
   /-- The state of every planned node. -/
   states : Std.HashMap Name NodeState := {}
-  /-- Real dependencies of the planned nodes, from the cache. -/
+  /-- Real dependencies of the planned nodes, derived from the entries' `refs`. -/
   real : Std.HashMap Name (Array Name) := {}
   /-- Effective dependencies: suggested while open, real once proved, both in between. -/
   eff : Std.HashMap Name (Array Name) := {}
   /-- Reverse of `eff`. -/
   dependents : Std.HashMap Name (Array Name) := {}
-  /-- The project's compiled modules, from the cache. -/
+  /-- The project's compiled modules, by module name. -/
   compiled : Std.HashMap Name ModuleRec := {}
   /-- The module name of every module of the tree, sorted. -/
   modules : Array Name := #[]
@@ -41,19 +43,9 @@ structure View where
   /-- The ids of the declarations of the project, by the module name of the module they are in. -/
   moduleDecls : Std.HashMap Name (Array Name) := {}
 
-/-- The state of a declaration from what the cache knows about it: open when it does not exist. -/
-def declState (d : Option DeclInfo) : NodeState :=
-  match d with
-  | none => .«open»
-  | some d =>
-    if !d.found then .«open»
-    else if d.hasSorry then .stated
-    else if d.isAxiom || !d.axiomsOk then .axioms
-    else .proved
-
 /-- The state of a planned node: its declaration's, unless it is marked wrong. -/
-def nodeState (n : Node) (d : Option DeclInfo) : NodeState :=
-  if n.wrong.isSome then .wrong else declState d
+def nodeState (n : Node) (e : Option CacheEntry) : NodeState :=
+  if n.wrong.isSome then .wrong else (e.map (·.state)).getD .«open»
 
 private def dedup (xs : Array Name) : Array Name := Id.run do
   let mut seen : Std.HashSet Name := {}
@@ -69,23 +61,56 @@ private def modulesAbove : Name → List Name
   | .str p _ | .num p _ => if p.isAnonymous then [] else p :: modulesAbove p
   | .anonymous => []
 
+/--
+The planned entries reachable from entry `i` through unplanned ones, memoized: the real
+dependencies at the grain of planned nodes, from the finest grain `refs` records. Sound because
+`refs` is acyclic, as the environment is.
+-/
+private partial def plannedReach (entries : Array CacheEntry) (planned : Array Bool) (i : Nat) :
+    StateM (Std.HashMap Nat (Array Nat)) (Array Nat) := do
+  if let some out := (← get)[i]? then return out
+  modify (·.insert i #[])
+  let mut acc : Std.HashSet Nat := {}
+  for r in (entries[i]?.map (·.refs)).getD #[] do
+    if planned[r]?.getD false then acc := acc.insert r
+    else acc := acc.insertMany (← plannedReach entries planned r)
+  let out := acc.toArray
+  modify (·.insert i out)
+  return out
+
 def mkView (plan : Plan) (cache : Option Cache) : View := Id.run do
   let mut v : View := { plan, cache }
   let mut inTree : Std.HashSet Name := plan.modules.foldl (init := {}) (·.insert ·.module)
   if let some c := cache then
-    for d in c.decls do
-      v := { v with decl := v.decl.insert d.id d, declIds := v.declIds.push d.id }
-      if d.declaration then
-        if let some m := d.module then
-          v := { v with moduleDecls := v.moduleDecls.insert m ((v.moduleDecls.getD m #[]).push d.id) }
+    v := { v with
+      entries := c.entries
+      index := c.entries.foldl (init := {}) fun m e => m.insert e.id m.size
+      entryModules := c.modules.map (·.name) }
     for m in c.modules do
-      v := { v with compiled := v.compiled.insert m.module m }
-      inTree := inTree.insert m.module
+      if m.olean.isSome then
+        v := { v with compiled := v.compiled.insert m.name m }
+        inTree := inTree.insert m.name
+    for e in c.entries do
+      if e.declaration then
+        if let some m := e.module >>= (v.entryModules[·]?) then
+          v := { v with moduleDecls := v.moduleDecls.insert m ((v.moduleDecls.getD m #[]).push e.id) }
+  -- real dependencies of the planned nodes, through the unplanned entries
+  let planned := v.entries.map fun e => plan.nodes.contains e.id
+  let mut memo : Std.HashMap Nat (Array Nat) := {}
   for (id, n) in plan.nodes.toArray do
-    let d := v.decl[id]?
-    let st := nodeState n d
+    let e := v.index[id]? >>= (v.entries[·]?)
+    let st := nodeState n e
     v := { v with states := v.states.insert id st }
-    let real := (d.map (·.uses)).getD #[] |>.filter plan.nodes.contains
+    let mut real : Array Name := #[]
+    if let some i := v.index[id]? then
+      let mut acc : Std.HashSet Nat := {}
+      for r in (e.map (·.refs)).getD #[] do
+        if planned[r]?.getD false then acc := acc.insert r
+        else
+          let (out, memo') := (plannedReach v.entries planned r).run memo
+          memo := memo'
+          acc := acc.insertMany out
+      real := sortNames ((acc.erase i).toArray.filterMap fun j => v.entries[j]?.map (·.id))
     let eff := match st with
       | .«open» => n.deps
       | .proved | .axioms => real
@@ -106,39 +131,58 @@ def mkView (plan : Plan) (cache : Option Cache) : View := Id.run do
 
 namespace View
 
+/-- The cache's entry for an id, if it has one. -/
+def entry? (v : View) (id : Name) : Option CacheEntry := v.index[id]? >>= (v.entries[·]?)
+
+/-- The module name of the module an entry is in. -/
+def entryModule? (v : View) (e : CacheEntry) : Option Name := e.module >>= (v.entryModules[·]?)
+
 /-- Whether an id is a planned node's. -/
 def isPlanned (v : View) (id : Name) : Bool := v.plan.nodes.contains id
 
+/-- Whether an id is a declaration's. -/
+def isDeclaration (v : View) (id : Name) : Bool := (v.entry? id).any (·.declaration)
+
 /-- The state of a planned node or a declaration. -/
 def state (v : View) (id : Name) : NodeState :=
-  v.states.getD id (declState v.decl[id]?)
+  v.states.getD id (((v.entry? id).map (·.state)).getD .«open»)
 
 /-- Whether the declaration has a doc comment, which then supersedes the plan's `desc`. -/
-def hasDoc (v : View) (id : Name) : Bool := (v.decl[id]?.bind (·.doc)).isSome
+def hasDoc (v : View) (id : Name) : Bool := ((v.entry? id).bind (·.doc)).isSome
 
-/-- The kind in force: read from the declaration once it exists, else the plan's `kind`. -/
-def kindOf (v : View) (id : Name) : Option NodeKind :=
-  match v.decl[id]? with
-  | some d => if d.found then some (if d.isTheorem then .theorem else .definition)
-              else (v.plan.node? id).bind (·.kind)
-  | none => (v.plan.node? id).bind (·.kind)
+/-- The kind in force: the declaration's once it exists, else the plan's `kind`. -/
+def kindOf? (v : View) (id : Name) : Option String :=
+  match (v.entry? id).bind (·.kind) with
+  | some k => some k.toString
+  | none => ((v.plan.node? id).bind (·.kind)).map toString
 
-def kindName (v : View) (id : Name) : String := ((v.kindOf id).map toString).getD "?"
+def kindName (v : View) (id : Name) : String := (v.kindOf? id).getD "?"
 
 /-- The description in force: the doc comment once there is one, else the plan's `desc`. -/
 def descOf (v : View) (id : Name) : String :=
-  match v.decl[id]?.bind (·.doc) with
+  match (v.entry? id).bind (·.doc) with
   | some d => d
   | none => ((v.plan.node? id).bind (·.desc)).getD ""
 
 def effDeps (v : View) (id : Name) : Array Name := v.eff.getD id #[]
 def realDeps (v : View) (id : Name) : Array Name := v.real.getD id #[]
 
-/-- The declarations and planned nodes a declaration refers to, through the other constants of
-the project. -/
+/-- The entries an entry refers to, through the other constants of the project. -/
 def refsOf (v : View) (id : Name) : Array Name :=
-  match v.decl[id]? with
-  | some d => d.refs.filterMap (v.declIds[·]?)
+  ((v.entry? id).map (·.refs)).getD #[] |>.filterMap fun i => v.entries[i]?.map (·.id)
+
+/-- The planned nodes an unplanned entry leads to, through other unplanned entries. -/
+def plannedUses (v : View) (id : Name) : Array Name :=
+  match v.index[id]? with
+  | none => #[]
+  | some i =>
+    let planned := v.entries.map fun e => v.plan.nodes.contains e.id
+    sortNames (((plannedReach v.entries planned i).run' {}).filterMap fun j => v.entries[j]?.map (·.id))
+
+/-- The entries that refer to an entry. -/
+def referrersOf (v : View) (id : Name) : Array Name :=
+  match v.index[id]? with
+  | some i => v.entries.filterMap fun e => if e.refs.contains i then some e.id else none
   | none => #[]
 
 /-- The module name of the module a planned node or a declaration is in: for a planned node,
@@ -146,7 +190,7 @@ the module whose plan names it. -/
 def moduleOf? (v : View) (id : Name) : Option Name :=
   match v.plan.node? id with
   | some n => some n.module
-  | none => v.decl[id]?.bind (·.module)
+  | none => (v.entry? id).bind v.entryModule?
 
 /-- A planned node is ready when it is not yet proved and every effective dependency is proved. -/
 def nodeReady (v : View) (id : Name) : Bool :=
@@ -231,7 +275,7 @@ def DeclCounts.total (c : DeclCounts) : Nat := c.definitions + c.theorems
 
 def countDecls (v : View) (ids : Array Name) : DeclCounts :=
   ids.foldl (init := {}) fun c id =>
-    if (v.decl[id]?.map (·.isTheorem)).getD false then { c with theorems := c.theorems + 1 }
+    if ((v.entry? id).bind (·.kind)) == some .theorem then { c with theorems := c.theorems + 1 }
     else { c with definitions := c.definitions + 1 }
 
 /-- Declaration counts over a module and every module under it. -/

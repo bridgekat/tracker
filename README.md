@@ -110,15 +110,21 @@ Then the planned nodes marked `wrong`, and regressions since the previous check.
 ### Cache
 
 - Lives at `<root>/.lake/tracker/check.json`, and is never committed.
-- Holds every declaration and every planned node's id, with signatures, doc comments and real
-  dependencies, so its size grows with the library, not with the plan.
-- Every command refreshes it first when stale: when the module plans, the compiled modules, the
-  root modules, the options, or the cache format changed. Staleness is judged by content hashes,
-  never timestamps.
+- Records the compiled library and nothing the plan says: every declaration, and every id the plan
+  named when the check ran, with kind, location, signature, doc comment, nonstandard axioms, and
+  `refs`, the entries each refers to.
+- Every command refreshes it first when stale: when the compiled modules, the root modules, the
+  options, or the cache format changed, or the plan names an id the cache has not resolved.
+  Editing a module plan otherwise needs no new check. Staleness is judged by content hashes, never
+  timestamps.
 - `check` is that refresh alone; it does nothing unless the cache is stale or `--force` is given.
 - `check` compares with the previous cache and reports every planned node whose state went down —
   this is how a renamed or broken declaration shows up. Unplanned declarations are not compared.
 - The tracker never builds, so unbuilt edits are invisible to it.
+
+The format is compact JSON: ids and module names are written once, in two tables, and referred to
+by index; fields at their default are left out; and the planned nodes' real dependencies are not
+stored but derived from `refs` when read.
 
 The tracker never writes a module plan: the plan is written by hand, and is the one thing the
 tracker only reads.
@@ -127,27 +133,29 @@ tracker only reads.
 
 The contract for anything that wants a picture; the tracker itself does not draw. `--under M`
 restricts output to a module and the modules under it. `--all` adds every declaration to the
-planned nodes. The JSON is one object with three arrays:
+planned nodes. The JSON is compact: one object with two tables, which refer to their own entries
+and to each other by index (position in the table). A field at its default — `false`, empty, or
+absent — is left out.
 
-| array | fields |
+| table | fields |
 |---|---|
-| `modules` | `module`, `parent`, `desc`, `exists`, `plan`, `done`, `ready` |
-| `nodes` | `id`, `module`, `planned`, `kind`, `state`, `desc`, `source`, `wrong`, `deprecated` |
-| `edges` | `from`, `to`, `real`, `suggested` |
+| `modules` | `name`, `parent`, `desc`, `exists`, `plan`, `done`, `ready` |
+| `nodes` | `id`, `module`, `planned`, `kind`, `state`, `desc`, `source`, `wrong`, `deprecated`, `deps`, `suggested` |
 
-- `modules` holds every module of the module tree in scope. `parent` is the module name one level
-  up; `exists` says whether the module is compiled, `plan` whether it has a module plan.
-- A node's `module` is the module whose plan names it for a planned node, else the module the
-  declaration is in; `planned` says which.
-- An edge means `from` depends on `to`. `real`: read from the compiled library; `suggested`:
-  written in the plan; both may be set.
-  - Without `--all`, real edges run between planned nodes, passing through unplanned
-    declarations (see [Dependencies](#dependencies)).
-  - With `--all`, real edges run between declarations and planned nodes directly, passing only
-    through what is neither (auxiliary and private constants). Planned-level edges follow from
+- `modules` holds every module of the module tree in scope. `name` is the module name; `parent` is
+  the index of the module one level up, when that is in scope; `exists` says whether the module is
+  compiled, `plan` whether it has a module plan.
+- A node's `module` is the index of the module whose plan names it, for a planned node, else of the
+  module the declaration is in; `planned` says which.
+- `deps` are indexes of the nodes a node depends on in the compiled library, `suggested` of those
+  its plan suggests; a node may be in both. Nodes outside the scope are left out of both.
+  - Without `--all`, `deps` run between planned nodes, passing through unplanned declarations
+    (see [Dependencies](#dependencies)).
+  - With `--all`, `deps` run between declarations and planned nodes directly, passing only through
+    what is neither (auxiliary and private constants). Planned-level dependencies follow from
     these by the same rule.
 - The DOT form has one cluster per module, nodes filled by state (unplanned declarations as small
-  ellipses), real edges solid, suggested edges dashed:
+  ellipses), real dependencies as solid edges, suggested ones dashed:
 
 ```
 lake exe tracker graph --dot --under Numbers | dot -Tsvg -o numbers.svg

@@ -75,9 +75,9 @@ def resolveModule (v : View) (target : String) : IO (Option Name) := do
 
 /-- The declarations of the project, and the planned nodes' ids. -/
 def allIds (v : View) : Array Name :=
-  v.declIds.filter (fun id => (v.decl[id]?.map (·.declaration)).getD false) ++
+  v.entries.filterMap (fun e => if e.declaration then some e.id else none) ++
     (sortNames (v.plan.nodes.fold (init := #[]) fun a id _ => a.push id)).filter
-      fun id => !((v.decl[id]?.map (·.declaration)).getD false)
+      (!v.isDeclaration ·)
 
 -- ## status
 
@@ -170,17 +170,17 @@ def ready (v : View) (json : Bool) : IO UInt32 := do
 -- ## show
 
 private def depLine (v : View) (d : Name) (tag : String) : String :=
-  let sig := match v.decl[d]? with
-    | some i => if i.signature.isEmpty then "" else "\n" ++ indent i.signature 6
+  let sig := match v.entry? d with
+    | some e => if e.signature.isEmpty then "" else "\n" ++ indent e.signature 6
     | none => ""
   s!"  {pad (v.state d).toString 7} {d}{tag}{sig}"
 
 /-- Where a declaration is, its signature, and its axioms when they are not the standard ones. -/
-private def showDeclInfo (d : DeclInfo) : IO Unit := do
-  if d.found then
-    IO.println s!"  at {d.module.map (·.toString) |>.getD "?"}:{d.line.map toString |>.getD "?"}"
-    if !d.signature.isEmpty then IO.println (indent d.signature 4)
-    if !d.axiomsOk then IO.println s!"  axioms: {d.axioms}"
+private def showEntry (v : View) (e : CacheEntry) : IO Unit := do
+  if e.found then
+    IO.println s!"  at {(v.entryModule? e).map (·.toString) |>.getD "?"}:{e.line.map toString |>.getD "?"}"
+    if !e.signature.isEmpty then IO.println (indent e.signature 4)
+    if !e.axioms.isEmpty then IO.println s!"  axioms: {e.axioms}"
 
 def showNode (v : View) (n : Node) : IO Unit := do
   IO.println s!"{n.id}  [{v.kindName n.id}, {v.state n.id}]  planned in module {n.module}"
@@ -192,7 +192,7 @@ def showNode (v : View) (n : Node) : IO Unit := do
   if let some s := n.source then IO.println s!"  source: {s}"
   if let some w := n.wrong then IO.println s!"  wrong: {w}"
   if let some d := n.deprecated then IO.println s!"  deprecated: {d}"
-  if let some d := v.decl[n.id]? then showDeclInfo d
+  if let some e := v.entry? n.id then showEntry v e
   let real := v.realDeps n.id
   let eff := v.effDeps n.id
   if !eff.isEmpty then
@@ -210,21 +210,20 @@ def showNode (v : View) (n : Node) : IO Unit := do
 
 /-- A declaration no plan names: what the library says about it, and where it sits among the
 declarations and planned nodes. -/
-def showDecl (v : View) (d : DeclInfo) : IO Unit := do
-  let m := d.module.map (·.toString) |>.getD "?"
-  IO.println s!"{d.id}  [{v.kindName d.id}, {v.state d.id}]  in module {m}, unplanned"
-  match d.doc with
+def showDecl (v : View) (e : CacheEntry) : IO Unit := do
+  let m := (v.entryModule? e).map (·.toString) |>.getD "?"
+  IO.println s!"{e.id}  [{v.kindName e.id}, {v.state e.id}]  in module {m}, unplanned"
+  match e.doc with
   | some doc => IO.println (indent doc)
   | none => IO.println "  (no doc comment)"
-  showDeclInfo d
-  if !d.uses.isEmpty then
+  showEntry v e
+  let uses := v.plannedUses e.id
+  if !uses.isEmpty then
     IO.println "  planned nodes it uses:"
-    for u in d.uses do IO.println (depLine v u "")
-  let refs := v.refsOf d.id
+    for u in uses do IO.println (depLine v u "")
+  let refs := v.refsOf e.id
   if !refs.isEmpty then IO.println s!"  refers to: {refs}"
-  let users := match v.declIds.findIdx? (· == d.id) with
-    | some i => v.declIds.filter fun u => ((v.decl[u]?.map fun (e : DeclInfo) => e.refs.contains i).getD false)
-    | none => #[]
+  let users := v.referrersOf e.id
   if !users.isEmpty then IO.println s!"  referred to by: {users}"
 
 def showModule (v : View) (m : Name) : IO Unit := do
@@ -271,9 +270,9 @@ private def showId (v : View) (id : Name) : IO Bool := do
   if let some n := v.plan.node? id then
     showNode v n
     return true
-  if let some d := v.decl[id]? then
-    if d.declaration then
-      showDecl v d
+  if let some e := v.entry? id then
+    if e.declaration then
+      showDecl v e
       return true
   return false
 
@@ -340,7 +339,8 @@ def lint (v : View) : IO UInt32 := do
       if let some d := n.desc then
         if isBlank d then errors := errors.push s!"{at_}: {n.id} has an empty desc"
       if v.cache.isSome then
-        let attached := (v.decl[n.id]?.map (·.found)).getD false
+        let entry := v.entry? n.id
+        let attached := entry.any (·.found)
         if !attached && n.desc.isNone then
           errors := errors.push s!"{at_}: {n.id} is open and has no desc"
         if attached && !v.hasDoc n.id && n.desc.isNone then
@@ -351,25 +351,21 @@ def lint (v : View) : IO UInt32 := do
           warnings := warnings.push s!"{at_}: {n.id}: deps is superseded by the real dependencies; remove it"
         if n.kind.isNone && !attached then
           errors := errors.push s!"{at_}: {n.id} is open and has no kind"
-      if let some d := v.decl[n.id]? then
-        if d.found then
-          match n.kind with
-          | some .theorem =>
-            if !d.isTheorem && !d.isAxiom then
+        if let some e := entry then
+          if let some k := e.kind then
+            match n.kind, k with
+            | some .theorem, .definition =>
               warnings := warnings.push s!"{at_}: {n.id} is planned as a theorem but the declaration is not one"
-            else
-              warnings := warnings.push s!"{at_}: {n.id}: kind is superseded by the declaration; remove it"
-          | some .definition =>
-            if d.isTheorem then
+            | some .definition, .theorem =>
               warnings := warnings.push s!"{at_}: {n.id} is planned as a definition but the declaration is a theorem"
-            else
+            | some _, _ =>
               warnings := warnings.push s!"{at_}: {n.id}: kind is superseded by the declaration; remove it"
-          | none => pure ()
-          if d.isAxiom then
-            errors := errors.push s!"{at_}: {n.id} is an axiom"
-          if let some dm := d.module then
-            if dm != mp.module then
-              warnings := warnings.push s!"{at_}: {n.id} is in module {dm}, not in module {mp.module}"
+            | none, _ => pure ()
+            if k == .axiom then
+              errors := errors.push s!"{at_}: {n.id} is an axiom"
+            if let some dm := v.entryModule? e then
+              if dm != mp.module then
+                warnings := warnings.push s!"{at_}: {n.id} is in module {dm}, not in module {mp.module}"
   for e in errors do IO.println s!"error: {e}"
   for w in warnings do IO.println s!"warning: {w}"
   if errors.isEmpty && warnings.isEmpty then IO.println "ok"
@@ -388,33 +384,41 @@ private def graphScope (v : View) (under? : Option Name) (all : Bool) : Array Na
     |>.filter fun id => (v.moduleOf? id).any inScope.contains
   (modules, ids)
 
-/-- The edges out of one node: its real dependencies — among planned nodes, or with `all` among
-every node — and a planned node's suggested ones. -/
-private def graphEdges (v : View) (all : Bool) (id : Name) : Array (Name × Bool × Bool) :=
-  let real := if all then v.refsOf id else v.realDeps id
-  let sugg := ((v.plan.node? id).map (·.deps)).getD #[]
-  (real ++ sugg.filter (!real.contains ·)).map fun d => (d, real.contains d, sugg.contains d)
+/-- A node's real dependencies — among planned nodes, or with `all` among every node — and its
+suggested ones, if it is a planned node. -/
+private def graphDeps (v : View) (all : Bool) (id : Name) : Array Name × Array Name :=
+  (if all then v.refsOf id else v.realDeps id, ((v.plan.node? id).map (·.deps)).getD #[])
 
-def graphJson (v : View) (under? : Option Name) (all : Bool) : Json :=
+/--
+The graph as one JSON object of two tables, `modules` and `nodes`, which refer to each other and
+to themselves by index. A field at its default (false, empty, absent) is left out.
+-/
+def graphJson (v : View) (under? : Option Name) (all : Bool) : Json := Id.run do
   let (modules, ids) := graphScope v under? all
-  let moduleJson := modules.map fun m => Json.mkObj [
-    ("module", toJson m.toString),
-    ("parent", toJson (if m.getPrefix.isAnonymous then none else some m.getPrefix.toString)),
-    ("desc", toJson (v.moduleDesc m)), ("exists", toJson (v.moduleExists m)),
-    ("plan", toJson (v.plan.modulePlan? m).isSome),
-    ("done", toJson (v.moduleDone m)), ("ready", toJson (v.moduleReady m))]
+  let moduleIdx : Std.HashMap Name Nat := modules.foldl (init := {}) fun m n => m.insert n m.size
+  let nodeIdx : Std.HashMap Name Nat := ids.foldl (init := {}) fun m n => m.insert n m.size
+  let flag (b : Bool) : Option Json := if b then some (toJson true) else none
+  let text (s : String) : Option Json := if s.isEmpty then none else some (toJson s)
+  let indexes (ns : Array Name) : Option Json :=
+    (nonEmpty? (ns.filterMap (nodeIdx[·]?) |>.qsort (· < ·))).map toJson
+  let moduleJson := modules.map fun m => objOmitting [
+    ("name", some (toJson m.toString)),
+    ("parent", moduleIdx[m.getPrefix]?.map toJson),
+    ("desc", text (v.moduleDesc m)), ("exists", flag (v.moduleExists m)),
+    ("plan", flag (v.plan.modulePlan? m).isSome),
+    ("done", flag (v.moduleDone m)), ("ready", flag (v.moduleReady m))]
   let nodeJson := ids.map fun id =>
     let n? := v.plan.node? id
-    Json.mkObj [
-      ("id", toJson id.toString), ("module", toJson ((v.moduleOf? id).map toString)),
-      ("planned", toJson n?.isSome), ("kind", toJson ((v.kindOf id).map toString)),
-      ("state", toJson (v.state id).toString), ("desc", toJson (v.descOf id)),
-      ("source", toJson (n?.bind (·.source))), ("wrong", toJson (n?.bind (·.wrong))),
-      ("deprecated", toJson (n?.bind (·.deprecated)))]
-  let edges := ids.flatMap fun id => (graphEdges v all id).map fun (d, real, sugg) =>
-    Json.mkObj [("from", toJson id.toString), ("to", toJson d.toString),
-      ("real", toJson real), ("suggested", toJson sugg)]
-  Json.mkObj [("modules", toJson moduleJson), ("nodes", toJson nodeJson), ("edges", toJson edges)]
+    let (real, sugg) := graphDeps v all id
+    objOmitting [
+      ("id", some (toJson id.toString)),
+      ("module", (v.moduleOf? id >>= (moduleIdx[·]?)).map toJson),
+      ("planned", flag n?.isSome), ("kind", (v.kindOf? id).map toJson),
+      ("state", some (toJson (v.state id).toString)), ("desc", text (v.descOf id)),
+      ("source", (n?.bind (·.source)).map toJson), ("wrong", (n?.bind (·.wrong)).map toJson),
+      ("deprecated", (n?.bind (·.deprecated)).map toJson),
+      ("deps", indexes real), ("suggested", indexes sugg)]
+  return Json.mkObj [("modules", toJson moduleJson), ("nodes", toJson nodeJson)]
 
 private def dotEscape (s : String) : String :=
   s.replace "\"" "\\\""
@@ -438,9 +442,12 @@ def graphDot (v : View) (under? : Option Name) (all : Bool) : String := Id.run d
       out := out ++ s!"    \"{id}\" [label=\"{dotEscape label}\", style=filled, fillcolor={color}{shape}];\n"
     out := out ++ "  }\n"
   for id in ids do
-    for (d, real, _) in graphEdges v all id do
-      if inScope.contains d then
-        out := out ++ (if real then s!"  \"{id}\" -> \"{d}\";\n" else s!"  \"{id}\" -> \"{d}\" [style=dashed];\n")
+    let (real, sugg) := graphDeps v all id
+    for d in real do
+      if inScope.contains d then out := out ++ s!"  \"{id}\" -> \"{d}\";\n"
+    for d in sugg do
+      if inScope.contains d && !real.contains d then
+        out := out ++ s!"  \"{id}\" -> \"{d}\" [style=dashed];\n"
   out := out ++ "}\n"
   return out
 
@@ -450,7 +457,7 @@ def graph (v : View) (under? : Option String) (all dot : Bool) : IO UInt32 := do
     let some r ← resolveModule v m | return 1
     under := some r
   if dot then IO.print (graphDot v under all)
-  else IO.println (graphJson v under all).pretty
+  else IO.println (graphJson v under all).compress
   return 0
 
 end Tracker
