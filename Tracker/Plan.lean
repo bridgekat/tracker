@@ -6,9 +6,9 @@ import Tracker.Toml
 
 Read every `*.toml` file under the plan directory as a module plan, of the module whose source
 file sits at the same path under the project root (`Numbers/Odd.toml` plans the module named
-`Numbers.Odd`), resolve planned node ids and suggested dependencies, and index everything. Errors
-are collected, not thrown, so that one bad file does not hide the others. No plan directory is an
-empty plan.
+`Numbers.Odd`), resolve the ids of planned declarations and suggested dependencies, and index
+everything. Errors are collected, not thrown, so that one bad file does not hide the others. No
+plan directory is an empty plan.
 -/
 
 open Lean
@@ -34,12 +34,12 @@ private def decodeNode (module : Name) (ns : Option Name) (ictx : Parser.InputCo
     (nt : Lake.Toml.Table) (ref : Syntax) : Lake.Toml.EDecodeM Node := do
   let rawId ← str nt `id ref
   unknownKeys nt [`id, `kind, `desc, `description, `deps, `source, `wrong, `deprecated]
-    s!"node {rawId} has id, kind, desc, deps, source, wrong and deprecated"
+    s!"[[node]] {rawId} has id, kind, desc, deps, source, wrong and deprecated"
   let kind ← match ← str? nt `kind with
     | none => pure none
     | some kindS => match NodeKind.parse? kindS with
       | some k => pure (some k)
-      | none => fail ref s!"unknown node kind '{kindS}' (use definition or theorem)"
+      | none => fail ref s!"unknown kind '{kindS}' (use definition or theorem)"
   let desc ← match ← str? nt `desc with
     | some d => pure (some d)
     | none => str? nt `description
@@ -61,7 +61,7 @@ private def decodeModulePlan (module : Name) (path : System.FilePath)
     | some d => pure (some d)
     | none => str? t `description
   let mut nodes : Array Node := #[]
-  -- one bad node does not hide the others: errors accumulate, decoding goes on
+  -- one bad [[node]] table does not hide the others: errors accumulate, decoding goes on
   for (nt, ref) in ← tables t `node do
     if let some n ← recover (decodeNode module ns ictx nt ref) then
       nodes := nodes.push n
@@ -103,7 +103,7 @@ def loadPlan (dir : System.FilePath) : IO Plan := do
       plan := { plan with
         moduleIdx := plan.moduleIdx.insert mp.module plan.modules.size
         modules := plan.modules.push mp }
-  -- index planned nodes, catching duplicate ids
+  -- index planned declarations, catching duplicate ids
   for mp in plan.modules do
     for n in mp.nodes do
       match plan.nodes[n.id]? with
@@ -137,7 +137,7 @@ def loadPlan (dir : System.FilePath) : IO Plan := do
       if !nodeMap.contains n.id then nodeMap := nodeMap.insert n.id n
   return { plan with nodes := nodeMap }
 
-/-- Display a planned node's id relative to its module plan's namespace. -/
+/-- Display a planned declaration's id relative to its module plan's namespace. -/
 def Plan.shortId (p : Plan) (n : Node) : String :=
   match p.modulePlan? n.module >>= (·.namespace) with
   | some ns => if ns.isPrefixOf n.id then (n.id.replacePrefix ns .anonymous).toString else n.id.toString

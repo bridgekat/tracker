@@ -1,6 +1,6 @@
-# Finished: kinds, doc comments and real dependencies are read from the library, so the nodes
-# keep only their id, and the module's doc comment describes the module. One declaration has no
-# doc comment and keeps its description.
+# Finished: kinds, doc comments and real dependencies are read from the library, so the planned
+# declarations keep only their id, and the module's doc comment describes the module. One
+# declaration has no doc comment and keeps its description.
 namespace = "Numbers"
 
 [[node]]
@@ -10,7 +10,7 @@ id = "IsEven"
 id = "IsOdd"
 
 # On its way out: `isEven_two_mul` covers it. Nothing in the library says so, so `lint` is where
-# the deprecation shows, on this node and on `IsEven.add`, which still suggests it.
+# the deprecation shows, on this declaration and on `IsEven.add`, which still suggests it.
 [[node]]
 id = "isEven_zero"
 deprecated = 'Subsumed by isEven_two_mul, which gives it at k = 0; use that instead.'

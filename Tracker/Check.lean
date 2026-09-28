@@ -5,16 +5,10 @@ import Tracker.Cache
 /-!
 # `tracker check`
 
-Import the project, collect its declarations, look every planned node's id up, and record what
-the compiled library says. This is the only part of the tool that touches Lean's environment.
-
-## Declarations
-
-A *declaration* of the project is a definition, an inductive type or a theorem that someone wrote
-in one of the project's modules: not an axiom, not private, and not something the elaborator
-generated beside what was written (constructors, recursors, projections, `deriving` instances,
-`where` helpers, equation lemmas). Declarations are what the tracker counts and what
-`graph --all` draws; every other constant of the project is looked through, never at.
+Import the project, collect its declarations (`moduleDecls`, by the filter `isHandWritten`), look
+up every planned declaration's id, and record what the compiled library says. This is the only
+part of the tool that touches Lean's environment. Every other constant of the project is looked through by
+the searches, never recorded.
 
 ## Performance
 
@@ -23,8 +17,8 @@ proof reaches through the constants in between — and both are shared by every 
 uses it. `Reach` computes each once per constant for the whole run, by memoized depth-first
 search, so the work is linear in the union of the closures rather than in their sum:
 `Lean.collectAxioms` walks the whole closure of a declaration afresh on every call, and on a
-library standing on Mathlib that made a check of eight thousand planned nodes take a quarter of
-an hour.
+library standing on Mathlib that made a check of eight thousand planned declarations take a
+quarter of an hour.
 
 Two lesser traps, recorded because both cost more than the searches themselves:
 `Environment.allImportedModuleNames` rebuilds an array of every imported module on each call, so
@@ -250,7 +244,7 @@ def runCore (env : Environment) (x : CoreM α) (ns : Name := .anonymous) : IO α
   return (← x.toIO ctx { env }).1
 
 /--
-The planned nodes whose state went down since the previous cache. A node marked `wrong` now is
+The planned declarations whose state went down since the previous cache. One marked `wrong` now is
 left out, whatever its declaration did.
 -/
 def regressionsSince (plan : Plan) (previous : Option Cache) (entries : Array CacheEntry) :
@@ -268,14 +262,14 @@ def regressionsSince (plan : Plan) (previous : Option Cache) (entries : Array Ca
     if a.rank < b.rank then out := out.push { id, before := b.toString, after := a.toString }
   return out
 
-/-- Check the declarations and every planned node against an environment the project was
+/-- Check the declarations and every planned declaration against an environment the project was
 imported into. -/
 def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
     (loadExts : Bool) (previous : Option Cache) : IO Cache := do
   let t1 ← IO.monoMsNow
   let r ← Reach.init env roots
   let projectModules := sortNames r.projectModules
-  -- the declarations, and the planned nodes beside them, which need not be declarations
+  -- the declarations, and the planned declarations beside them, which need not be declarations
   let mut declSet : Std.HashSet Name := {}
   for m in projectModules do
     declSet := declSet.insertMany (← runCore env (moduleDecls m))
@@ -307,7 +301,7 @@ def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
     entries := entries.push { e with module, refs := (refs.filterMap (index[·]?)).qsort (· < ·) }
   let t2 ← IO.monoMsNow
   IO.eprintln s!"resolved {ids.size} ids ({declSet.size} declarations, {plannedSet.size} planned \
-    nodes) in {t2 - t1} ms"
+    declarations) in {t2 - t1} ms"
   return { roots, loadExts, modules, entries, regressions := regressionsSince plan previous entries }
 
 /-- Import the project and check it. -/

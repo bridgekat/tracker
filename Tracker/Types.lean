@@ -3,8 +3,9 @@ import Lean
 /-!
 # Types
 
-The plan (hand-written intent, read from TOML module plans) and the cache (derived state, written
-by `tracker check`). Nothing here is computed; see `Tracker.Graph` for that.
+The plan (hand-written intent, read from TOML module plans) and the cache (what the compiled
+library says, written by `tracker check`), with their JSON forms. What is computed from both is in
+`Tracker.Graph`.
 -/
 
 open Lean
@@ -22,7 +23,7 @@ def trim (s : String) : String :=
 def sortNames (ns : Array Name) : Array Name :=
   (ns.map fun n => (n.toString, n)).qsort (·.1 < ·.1) |>.map (·.2)
 
-/-- A planned node, or a declaration, is a definition or a theorem. -/
+/-- A planned declaration, or a declaration, is a definition or a theorem. -/
 inductive NodeKind where
   | definition
   | theorem
@@ -43,7 +44,7 @@ def parse? : String → Option NodeKind
 
 end NodeKind
 
-/-- A planned node: one `[[node]]` entry of a module plan, after id resolution. -/
+/-- A planned declaration: one `[[node]]` entry of a module plan, after id resolution. -/
 structure Node where
   /-- The fully qualified Lean identifier the declaration has or will have. -/
   id : Name
@@ -51,15 +52,15 @@ structure Node where
   kind : Option NodeKind := none
   /-- The natural-language statement, until the declaration has a doc comment. -/
   desc : Option String := none
-  /-- Suggested dependencies, resolved to planned node ids. -/
+  /-- Suggested dependencies, resolved to planned declaration ids. -/
   deps : Array Name := #[]
   /-- Where the statement comes from, e.g. `Textbook, Theorem 1.2`. -/
   source : Option String := none
   /-- Set by hand when the statement was found false or unprovable as stated. -/
   wrong : Option String := none
-  /-- Set by hand when the node is on its way out: why, and what to use instead. -/
+  /-- Set by hand when the declaration is on its way out: why, and what to use instead. -/
   deprecated : Option String := none
-  /-- The module name of the module plan that names this node. -/
+  /-- The module name of the module plan that names it. -/
   module : Name := .anonymous
   /-- Line of the `[[node]]` header in the module plan, for messages. -/
   line : Nat := 0
@@ -69,11 +70,7 @@ structure Node where
   rawDeps : Array String := #[]
   deriving Inhabited
 
-/--
-A module plan: one TOML file under the plan directory, the plan for one module. The file sits
-where the module's source file sits under the project root: the plan of the module named
-`Numbers.Odd`, whose source is `Numbers/Odd.lean`, is `Numbers/Odd.toml`.
--/
+/-- A module plan: one TOML file under the plan directory, the plan for one module. -/
 structure ModulePlan where
   /-- The module name, as `import` writes it: `Numbers.Odd`. -/
   module : Name
@@ -94,7 +91,7 @@ def planModuleName (components : List String) : Name :=
 /-- Every module plan, with indexes. `errors` collects everything that went wrong while loading. -/
 structure Plan where
   modules : Array ModulePlan := #[]
-  /-- The planned nodes by id. -/
+  /-- The planned declarations by id. -/
   nodes : Std.HashMap Name Node := {}
   /-- The index in `modules` of each module plan, by module name. -/
   moduleIdx : Std.HashMap Name Nat := {}
@@ -106,10 +103,10 @@ def Plan.modulePlan? (p : Plan) (m : Name) : Option ModulePlan :=
 
 def Plan.node? (p : Plan) (id : Name) : Option Node := p.nodes[id]?
 
-/-- The state of a planned node or a declaration, derived from the compiled library except for
+/-- The state of a declaration, planned or not, derived from the compiled library except for
 `wrong`. -/
 inductive NodeState where
-  /-- The id does not resolve; the node is a plan. -/
+  /-- The id does not resolve; the planned declaration is still a plan. -/
   | «open»
   /-- The declaration exists and depends on `sorry`. -/
   | stated
@@ -181,17 +178,17 @@ def objOmitting (fields : List (String × Option Json)) : Json :=
 /-- `some` unless the array is empty. -/
 def nonEmpty? (a : Array α) : Option (Array α) := if a.isEmpty then none else some a
 
-/-- The standard axioms a proved node may depend on. -/
+/-- The standard axioms a proved declaration may depend on. -/
 def standardAxioms : List Name := [``propext, ``Classical.choice, ``Quot.sound]
 
 /--
-One entry of the cache: a declaration of the project, or a planned node's id, which may not
+One entry of the cache: a declaration of the project, or a planned declaration's id, which may not
 resolve or may resolve to something that is not a declaration (outside the project, private, or
 generated).
 -/
 structure CacheEntry where
   id : Name
-  /-- Whether it is one of the project's declarations, and not only a planned node's id. -/
+  /-- Whether it is one of the project's declarations, and not only a planned declaration's id. -/
   declaration : Bool := true
   /-- What the id resolves to; none when it does not resolve. -/
   kind : Option DeclKind := none
@@ -204,7 +201,7 @@ structure CacheEntry where
   `Cache.entries`: its real dependencies at the finest grain. -/
   refs : Array Nat := #[]
   signature : String := ""
-  /-- The doc comment, which supersedes a planned node's `desc`. -/
+  /-- The doc comment, which supersedes a planned declaration's `desc`. -/
   doc : Option String := none
   deriving Inhabited
 
@@ -284,9 +281,10 @@ structure Cache where
   loadExts : Bool := true
   /-- The project's modules, sorted by module name, then any other module an entry is in. -/
   modules : Array ModuleRec := #[]
-  /-- Every declaration of the project, and every planned node's id at check time, sorted by id. -/
+  /-- Every declaration of the project, and every planned declaration's id at check time, sorted
+  by id. -/
   entries : Array CacheEntry := #[]
-  /-- The planned nodes whose state went down at the check that wrote the cache. -/
+  /-- The planned declarations whose state went down at the check that wrote the cache. -/
   regressions : Array Regression := #[]
   deriving ToJson, FromJson, Inhabited
 

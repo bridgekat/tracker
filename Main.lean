@@ -39,14 +39,13 @@ usage: tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <
   check [--force]                   make the cache fresh: import the project, resolve every id
   status [module] [--json]          counts per module, rolled up the module tree; regressions
   ready [--json]                    modules whose outside dependencies are all proved
-  show <module | id>                a module's brief, or everything about one planned node or
-                                    declaration
-  lint                              plan errors, cycles, mismatches, deprecations
-  graph [--under M] [--all] [--dot] the planned nodes (with --all, every declaration) as JSON or
-                                    Graphviz DOT
+  show <module | id>                a module's brief, or everything about one declaration
+  lint                              plan errors, cycles, mismatches, deprecations, superseded fields
+  graph [--under M] [--all] [--dot] the dependency graph of the planned declarations (with --all,
+                                    of every declaration) as JSON or Graphviz DOT
 
-Modules are named by module name (Numbers.Odd), planned nodes and declarations by id
-(Numbers.IsOdd.add_odd); either may be shortened to an unambiguous trailing part.
+Modules are named by module name (Numbers.Odd), declarations by id (Numbers.IsOdd.add_odd);
+either may be shortened to an unambiguous trailing part.
 
 Every command checks first when the cache is stale, that is when the project's oleans, the root
 modules or the options changed since it was written, or the plan names ids it has not resolved.
@@ -144,7 +143,7 @@ unsafe def run (a : Args) : IO UInt32 := do
     let c := v.totals
     let d := v.declTotals
     let tail := if ran then s!"cache written to {cachePath root}" else "cache is fresh (--force checks anyway)"
-    IO.println s!"planned nodes: {c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms"
+    IO.println s!"planned declarations: {c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms"
     IO.println (declSummary d)
     IO.println tail
     if ran && !cache.regressions.isEmpty then

@@ -4,12 +4,9 @@ import Tracker.Plan
 /-!
 # The graph
 
-Everything computed from the plan and the cache: states, effective dependencies, readiness, the
-module tree and its roll-ups, and cycle detection on the suggestions.
-
-The module tree holds every module of the project and every module that has a plan, arranged by
-module name: `Numbers` is above `Numbers.Odd`, and is in the tree whether or not it exists or has
-a plan. The tree follows module names only; the namespaces of ids play no part in it.
+Everything computed from the plan and the cache: states, real and effective dependencies,
+readiness, the module tree and its roll-ups, and cycle detection on the suggestions. The concepts
+are those of the README's Concepts section.
 -/
 
 open Lean
@@ -20,15 +17,15 @@ namespace Tracker
 structure View where
   plan : Plan
   cache : Option Cache
-  /-- The cache's entries: the declarations and the planned nodes' ids at check time. -/
+  /-- The cache's entries: the declarations and the planned declarations' ids at check time. -/
   entries : Array CacheEntry := #[]
   /-- The index in `entries` of each id. -/
   index : Std.HashMap Name Nat := {}
   /-- The module names of `Cache.modules`, which `CacheEntry.module` indexes. -/
   entryModules : Array Name := #[]
-  /-- The state of every planned node. -/
+  /-- The state of every planned declaration. -/
   states : Std.HashMap Name NodeState := {}
-  /-- Real dependencies of the planned nodes, derived from the entries' `refs`. -/
+  /-- Real dependencies of the planned declarations, derived from the entries' `refs`. -/
   real : Std.HashMap Name (Array Name) := {}
   /-- Effective dependencies: suggested while open, real once proved, both in between. -/
   eff : Std.HashMap Name (Array Name) := {}
@@ -43,7 +40,7 @@ structure View where
   /-- The ids of the declarations of the project, by the module name of the module they are in. -/
   moduleDecls : Std.HashMap Name (Array Name) := {}
 
-/-- The state of a planned node: its declaration's, unless it is marked wrong. -/
+/-- The state of a planned declaration: its declaration's, unless it is marked wrong. -/
 def nodeState (n : Node) (e : Option CacheEntry) : NodeState :=
   if n.wrong.isSome then .wrong else (e.map (·.state)).getD .«open»
 
@@ -63,8 +60,8 @@ private def modulesAbove : Name → List Name
 
 /--
 The planned entries reachable from entry `i` through unplanned ones, memoized: the real
-dependencies at the grain of planned nodes, from the finest grain `refs` records. Sound because
-`refs` is acyclic, as the environment is.
+dependencies at the grain of planned declarations, from the finest grain `refs` records. Sound
+because `refs` is acyclic.
 -/
 private partial def plannedReach (entries : Array CacheEntry) (planned : Array Bool) (i : Nat) :
     StateM (Std.HashMap Nat (Array Nat)) (Array Nat) := do
@@ -94,7 +91,7 @@ def mkView (plan : Plan) (cache : Option Cache) : View := Id.run do
       if e.declaration then
         if let some m := e.module >>= (v.entryModules[·]?) then
           v := { v with moduleDecls := v.moduleDecls.insert m ((v.moduleDecls.getD m #[]).push e.id) }
-  -- real dependencies of the planned nodes, through the unplanned entries
+  -- real dependencies of the planned declarations, through the unplanned entries
   let planned := v.entries.map fun e => plan.nodes.contains e.id
   let mut memo : Std.HashMap Nat (Array Nat) := {}
   for (id, n) in plan.nodes.toArray do
@@ -137,13 +134,13 @@ def entry? (v : View) (id : Name) : Option CacheEntry := v.index[id]? >>= (v.ent
 /-- The module name of the module an entry is in. -/
 def entryModule? (v : View) (e : CacheEntry) : Option Name := e.module >>= (v.entryModules[·]?)
 
-/-- Whether an id is a planned node's. -/
+/-- Whether an id is a planned declaration's. -/
 def isPlanned (v : View) (id : Name) : Bool := v.plan.nodes.contains id
 
 /-- Whether an id is a declaration's. -/
 def isDeclaration (v : View) (id : Name) : Bool := (v.entry? id).any (·.declaration)
 
-/-- The state of a planned node or a declaration. -/
+/-- The state of a declaration, planned or not. -/
 def state (v : View) (id : Name) : NodeState :=
   v.states.getD id (((v.entry? id).map (·.state)).getD .«open»)
 
@@ -171,7 +168,7 @@ def realDeps (v : View) (id : Name) : Array Name := v.real.getD id #[]
 def refsOf (v : View) (id : Name) : Array Name :=
   ((v.entry? id).map (·.refs)).getD #[] |>.filterMap fun i => v.entries[i]?.map (·.id)
 
-/-- The planned nodes an unplanned entry leads to, through other unplanned entries. -/
+/-- The planned declarations an unplanned entry leads to, through other unplanned entries. -/
 def plannedUses (v : View) (id : Name) : Array Name :=
   match v.index[id]? with
   | none => #[]
@@ -185,14 +182,15 @@ def referrersOf (v : View) (id : Name) : Array Name :=
   | some i => v.entries.filterMap fun e => if e.refs.contains i then some e.id else none
   | none => #[]
 
-/-- The module name of the module a planned node or a declaration is in: for a planned node,
-the module whose plan names it. -/
+/-- The module name of the module a declaration, planned or not, is in: for a planned
+declaration, the module whose plan names it. -/
 def moduleOf? (v : View) (id : Name) : Option Name :=
   match v.plan.node? id with
   | some n => some n.module
   | none => (v.entry? id).bind v.entryModule?
 
-/-- A planned node is ready when it is not yet proved and every effective dependency is proved. -/
+/-- A planned declaration is ready when it is not yet proved and every effective dependency is
+proved. -/
 def nodeReady (v : View) (id : Name) : Bool :=
   match v.state id with
   | .«open» | .stated => (v.effDeps id).all fun d => v.state d == .proved
@@ -214,14 +212,14 @@ partial def subtree (v : View) (m : Name) : Array Name := Id.run do
       stack := (v.children.getD x #[]).toList ++ rest
   return out
 
-/-- The planned nodes of a module's own plan. -/
+/-- The planned declarations of a module's own plan. -/
 def ownNodes (v : View) (m : Name) : Array Node :=
   (v.plan.modulePlan? m).map (·.nodes) |>.getD #[]
 
-/-- The planned nodes of a module and of every module under it. -/
+/-- The planned declarations of a module and of every module under it. -/
 def subtreeNodes (v : View) (m : Name) : Array Node := (v.subtree m).flatMap v.ownNodes
 
-/-- A module's own planned nodes that can be worked on: open or stated. -/
+/-- A module's own planned declarations that can be worked on: open or stated. -/
 def ownWork (v : View) (m : Name) : Array Node :=
   (v.ownNodes m).filter fun n => match v.state n.id with
     | .«open» | .stated => true
@@ -239,7 +237,7 @@ def moduleDesc (v : View) (m : Name) : String :=
   | some d => d
   | none => ((v.plan.modulePlan? m).bind (·.desc)).getD ""
 
-/-- Counts of planned nodes by state. -/
+/-- Counts of planned declarations by state. -/
 structure Counts where
   «open» : Nat := 0
   stated : Nat := 0
@@ -259,10 +257,10 @@ def countNodes (v : View) (ns : Array Node) : Counts :=
     | .axioms => { c with axioms := c.axioms + 1 }
     | .wrong => { c with wrong := c.wrong + 1 }
 
-/-- Planned node counts over a module and every module under it. -/
+/-- Planned declaration counts over a module and every module under it. -/
 def counts (v : View) (m : Name) : Counts := v.countNodes (v.subtreeNodes m)
 
-/-- Planned node counts over the whole plan. -/
+/-- Planned declaration counts over the whole plan. -/
 def totals (v : View) : Counts := v.countNodes (v.plan.modules.flatMap (·.nodes))
 
 /-- Counts of declarations by kind. -/
@@ -286,12 +284,14 @@ def declCounts (v : View) (m : Name) : DeclCounts :=
 def declTotals (v : View) : DeclCounts :=
   v.countDecls (v.moduleDecls.fold (init := #[]) fun a _ ids => a ++ ids)
 
-/-- Done when every planned node in and under the module is proved (and there is at least one). -/
+/-- Done when every planned declaration in and under the module is proved (and there is at least
+one). -/
 def moduleDone (v : View) (m : Name) : Bool :=
   let ns := v.subtreeNodes m
   !ns.isEmpty && ns.all fun n => v.state n.id == .proved
 
-/-- Dependencies of the module's workable planned nodes that are not its own planned nodes. -/
+/-- Dependencies of the module's workable planned declarations that are not its own planned
+declarations. -/
 def outsideDeps (v : View) (m : Name) : Array Name := Id.run do
   let inside : Std.HashSet Name := (v.ownNodes m).foldl (init := {}) fun s n => s.insert n.id
   let mut out := #[]
@@ -301,8 +301,8 @@ def outsideDeps (v : View) (m : Name) : Array Name := Id.run do
   return out
 
 /--
-Ready when the module has open or stated planned nodes of its own and every dependency of those
-outside the module is proved: the module can be worked on now.
+Ready when the module has open or stated planned declarations of its own and every dependency of
+those outside the module is proved: the module can be worked on now.
 -/
 def moduleReady (v : View) (m : Name) : Bool :=
   !(v.ownWork m).isEmpty && (v.outsideDeps m).all fun d => v.state d == .proved

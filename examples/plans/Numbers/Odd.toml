@@ -1,4 +1,5 @@
-# The task in progress: one node is misfiled, one is stated with `sorry`, one is not written yet.
+# The task in progress: one planned declaration is misfiled, one is stated with `sorry`, one is
+# not written yet.
 # Every outside dependency is proved, so `tracker ready` lists it. The `desc` is kept although
 # the module already has a doc comment, so that `lint` reports it as superseded.
 namespace = "Numbers"

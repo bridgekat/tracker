@@ -10,7 +10,7 @@ import Tracker.Cache
 print `Lean.Json`.
 
 A module is named on the command line by its module name (`Numbers.Odd`) or an unambiguous
-trailing part of it (`Odd`); a planned node or a declaration by its id, likewise.
+trailing part of it (`Odd`); a declaration, planned or not, by its id, likewise.
 -/
 
 open Lean
@@ -59,7 +59,7 @@ def moduleOrder (v : View) (from? : Option Name := none) : Array (Name × Nat) :
 
 def noCacheWarning (v : View) : IO Unit := do
   if v.cache.isNone then
-    IO.eprintln "warning: no cache; every planned node reads as open, and there are no declarations"
+    IO.eprintln "warning: no cache; every planned declaration reads as open, and there are no declarations"
 
 /-- A module by its module name, or by an unambiguous trailing part of it. Says why when nothing
 matches or several do. -/
@@ -73,7 +73,7 @@ def resolveModule (v : View) (target : String) : IO (Option Name) := do
     for m in hits do IO.eprintln s!"  {m}"
     return none
 
-/-- The declarations of the project, and the planned nodes' ids. -/
+/-- The declarations of the project, and the planned declarations' ids. -/
 def allIds (v : View) : Array Name :=
   v.entries.filterMap (fun e => if e.declaration then some e.id else none) ++
     (sortNames (v.plan.nodes.fold (init := #[]) fun a id _ => a.push id)).filter
@@ -81,8 +81,8 @@ def allIds (v : View) : Array Name :=
 
 -- ## status
 
-/-- What a row says: done for the subtree; ready or blocked for the module's own planned nodes;
-else nothing. -/
+/-- What a row says: done for the subtree; ready or blocked for the module's own planned
+declarations; else nothing. -/
 def View.moduleState (v : View) (m : Name) : String :=
   if v.moduleDone m then "done"
   else if v.moduleReady m then "ready"
@@ -121,10 +121,10 @@ def status (v : View) (module? : Option String) (json : Bool) : IO UInt32 := do
     -- the top row in full, the rows under it by the last component: the indentation says the rest
     let label := if depth == 0 then m.toString else "".pushn ' ' (2 * depth) ++ m.componentsRev.head!.toString
     IO.println s!"{pad label 40} {pad (toString c.proved) 7} {pad (toString c.stated) 7} {pad (toString c.open) 6} {pad (toString c.wrong) 6} {pad (toString c.axioms) 7} {pad (toString (v.declCounts m).total) 7} {v.moduleState m}"
-  IO.println s!"\nplanned nodes: {c.total} ({c.proved} proved, {c.stated} stated, {c.open} open, \
+  IO.println s!"\nplanned declarations: {c.total} ({c.proved} proved, {c.stated} stated, {c.open} open, \
     {c.wrong} wrong, {c.axioms} axioms)"
   IO.println (declSummary d)
-  -- wrong planned nodes and regressions
+  -- wrong planned declarations and regressions
   let inScope (m : Name) := match from? with
     | some f => f.isPrefixOf m
     | none => true
@@ -209,7 +209,7 @@ def showNode (v : View) (n : Node) : IO Unit := do
     IO.println s!"  needed by: {dependents}"
 
 /-- A declaration no plan names: what the library says about it, and where it sits among the
-declarations and planned nodes. -/
+declarations and planned declarations. -/
 def showDecl (v : View) (e : CacheEntry) : IO Unit := do
   let m := (v.entryModule? e).map (·.toString) |>.getD "?"
   IO.println s!"{e.id}  [{v.kindName e.id}, {v.state e.id}]  in module {m}, unplanned"
@@ -219,7 +219,7 @@ def showDecl (v : View) (e : CacheEntry) : IO Unit := do
   showEntry v e
   let uses := v.plannedUses e.id
   if !uses.isEmpty then
-    IO.println "  planned nodes it uses:"
+    IO.println "  planned declarations it uses:"
     for u in uses do IO.println (depLine v u "")
   let refs := v.refsOf e.id
   if !refs.isEmpty then IO.println s!"  refers to: {refs}"
@@ -236,7 +236,7 @@ def showModule (v : View) (m : Name) : IO Unit := do
   IO.println (if tags.isEmpty then m.toString else s!"{m}  [{", ".intercalate tags}]")
   if let some ns := (v.plan.modulePlan? m).bind (·.namespace) then IO.println s!"  namespace: {ns}"
   if c.total > 0 then
-    IO.println s!"  planned nodes: {c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms"
+    IO.println s!"  planned declarations: {c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms"
   IO.println s!"  {declSummary d}"
   let desc := v.moduleDesc m
   if !desc.isEmpty then
@@ -254,7 +254,7 @@ def showModule (v : View) (m : Name) : IO Unit := do
       IO.println s!"  {pad k.toString 40} {planned}{plural (v.declCounts k).total "declaration"}"
   let nodes := v.ownNodes m
   if !nodes.isEmpty then
-    IO.println "\nplanned nodes:"
+    IO.println "\nplanned declarations:"
     for n in nodes do
       IO.println s!"  {pad (v.state n.id).toString 7} {pad (v.kindName n.id) 10} {v.plan.shortId n}"
       IO.println (indent (v.descOf n.id) 20)
@@ -265,7 +265,7 @@ def showModule (v : View) (m : Name) : IO Unit := do
     IO.println "\noutside dependencies:"
     for dep in outside do IO.println (depLine v dep "")
 
-/-- A planned node, or else a declaration, by its exact id. -/
+/-- A planned declaration, or else a declaration, by its exact id. -/
 private def showId (v : View) (id : Name) : IO Bool := do
   if let some n := v.plan.node? id then
     showNode v n
@@ -294,7 +294,7 @@ def «show» (v : View) (target : String) : IO UInt32 := do
   match modules, hits with
   | #[m], #[] => showModule v m; return 0
   | #[], #[id] => discard <| showId v id; return 0
-  | #[], #[] => IO.eprintln s!"no module, planned node or declaration named '{target}'"; return 1
+  | #[], #[] => IO.eprintln s!"no module, planned declaration or declaration named '{target}'"; return 1
   | _, _ =>
     IO.eprintln s!"'{target}' is ambiguous:"
     for m in modules do IO.eprintln s!"  module {m}"
@@ -326,7 +326,7 @@ def lint (v : View) : IO UInt32 := do
       let at_ := s!"{p}:{n.line}"
       if let some w := n.wrong then
         if isBlank w then errors := errors.push s!"{at_}: {n.id} is marked wrong without a reason"
-      -- deprecation is hand-set and read nowhere else: lint is where it surfaces, node and users
+      -- deprecation is hand-set and read nowhere else: lint is where it surfaces, with its users
       if let some d := n.deprecated then
         if isBlank d then
           errors := errors.push s!"{at_}: {n.id} is marked deprecated without a reason"
@@ -374,7 +374,7 @@ def lint (v : View) : IO UInt32 := do
 -- ## graph
 
 /-- What `graph` draws: the modules of the tree under `under?` (all of them without it), and in
-those modules the planned nodes, with `all` every declaration too. -/
+those modules the planned declarations, with `all` every declaration too. -/
 private def graphScope (v : View) (under? : Option Name) (all : Bool) : Array Name × Array Name :=
   let modules := match under? with
     | some m => v.subtree m
@@ -384,8 +384,8 @@ private def graphScope (v : View) (under? : Option Name) (all : Bool) : Array Na
     |>.filter fun id => (v.moduleOf? id).any inScope.contains
   (modules, ids)
 
-/-- A node's real dependencies — among planned nodes, or with `all` among every node — and its
-suggested ones, if it is a planned node. -/
+/-- A graph node's real dependencies — among planned declarations, or with `all` among every
+node — and its suggested ones, if it is a planned declaration. -/
 private def graphDeps (v : View) (all : Bool) (id : Name) : Array Name × Array Name :=
   (if all then v.refsOf id else v.realDeps id, ((v.plan.node? id).map (·.deps)).getD #[])
 

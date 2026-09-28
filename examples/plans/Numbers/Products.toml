@@ -1,6 +1,6 @@
-# Not written yet, and blocked: its node depends on an open node of the odd-numbers task, so
-# `tracker ready` leaves it out until that is proved. Until the module exists, the plan's `desc`
-# is its description.
+# Not written yet, and blocked: its planned declaration depends on an open one of the odd-numbers
+# task, so `tracker ready` leaves it out until that is proved. Until the module exists, the plan's
+# `desc` is its description.
 namespace = "Numbers"
 desc = 'Products of odd numbers.'
 

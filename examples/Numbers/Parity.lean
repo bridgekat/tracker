@@ -19,7 +19,7 @@ theorem isEven_zero : IsEven 0 := ⟨0, rfl⟩
 /-- One is odd. Filed here although the plan expects it in `Numbers.Odd`; `tracker lint` says so. -/
 theorem isOdd_one : IsOdd 1 := ⟨0, rfl⟩
 
--- No doc comment on purpose: the plan keeps this node's `desc`.
+-- No doc comment on purpose: the plan keeps this declaration's `desc`.
 theorem isEven_two_mul (k : Nat) : IsEven (2 * k) := ⟨k, rfl⟩
 
 /-- Doubling distributes over a sum. No plan names this helper; it is a declaration all the same,
