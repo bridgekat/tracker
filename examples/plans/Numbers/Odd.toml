@@ -7,7 +7,7 @@ Prove the odd-number lemmas from the parity module. `IsEven.add_one_odd` does th
 other direction and is the model to follow.
 '''
 
-# Lives in Numbers.Parity, not here: `lint` reports the placement mismatch.
+# In module Numbers.Parity, not here: `lint` reports the placement mismatch.
 [[node]]
 id = "isOdd_one"
 

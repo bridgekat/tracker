@@ -3,7 +3,7 @@ import Lean
 /-!
 # Types
 
-The plan (hand-written intent, read from TOML group files) and the cache (derived state, written
+The plan (hand-written intent, read from TOML module plans) and the cache (derived state, written
 by `tracker check`). Nothing here is computed; see `Tracker.Graph` for that.
 -/
 
@@ -18,7 +18,11 @@ def hex (h : UInt64) : String := String.ofList (Nat.toDigits 16 h.toNat)
 def trim (s : String) : String :=
   String.ofList ((s.toList.dropWhile Char.isWhitespace).reverse.dropWhile Char.isWhitespace).reverse
 
-/-- A node is a definition or a theorem. -/
+/-- Sort names by their printed form, printing each once rather than twice per comparison. -/
+def sortNames (ns : Array Name) : Array Name :=
+  (ns.map fun n => (n.toString, n)).qsort (·.1 < ·.1) |>.map (·.2)
+
+/-- A planned node, or a declaration, is a definition or a theorem. -/
 inductive NodeKind where
   | definition
   | theorem
@@ -39,7 +43,7 @@ def parse? : String → Option NodeKind
 
 end NodeKind
 
-/-- One `[[node]]` entry of a group file, after id resolution. -/
+/-- A planned node: one `[[node]]` entry of a module plan, after id resolution. -/
 structure Node where
   /-- The fully qualified Lean identifier the declaration has or will have. -/
   id : Name
@@ -47,7 +51,7 @@ structure Node where
   kind : Option NodeKind := none
   /-- The natural-language statement, until the declaration has a doc comment. -/
   desc : Option String := none
-  /-- Suggested dependencies, resolved to node ids. -/
+  /-- Suggested dependencies, resolved to planned node ids. -/
   deps : Array Name := #[]
   /-- Where the statement comes from, e.g. `Textbook, Theorem 1.2`. -/
   source : Option String := none
@@ -55,9 +59,9 @@ structure Node where
   wrong : Option String := none
   /-- Set by hand when the node is on its way out: why, and what to use instead. -/
   deprecated : Option String := none
-  /-- The group (file stem) this node belongs to. -/
-  group : String := ""
-  /-- Line of the `[[node]]` header in the group file, for messages. -/
+  /-- The module name of the module plan that names this node. -/
+  module : Name := .anonymous
+  /-- Line of the `[[node]]` header in the module plan, for messages. -/
   line : Nat := 0
   /-- The id as written, before namespace resolution. -/
   rawId : String := ""
@@ -65,62 +69,47 @@ structure Node where
   rawDeps : Array String := #[]
   deriving Inhabited
 
-/-- One group file: the plan for one module. -/
-structure Group where
-  /-- The file's path under the plan directory without `.toml`, with `/` between components,
-  which is the module's path too: `Numbers/Odd` for `Numbers/Odd.toml`, the plan for
-  `Numbers.Odd`. How the group is referred to everywhere. The directory of the same name beside
-  the file holds the group's children. -/
-  name : String
-  /-- Ids inside the group are resolved relative to this namespace. -/
+/--
+A module plan: one TOML file under the plan directory, the plan for one module. The file sits
+where the module's source file sits under the project root: the plan of the module named
+`Numbers.Odd`, whose source is `Numbers/Odd.lean`, is `Numbers/Odd.toml`.
+-/
+structure ModulePlan where
+  /-- The module name, as `import` writes it: `Numbers.Odd`. -/
+  module : Name
+  /-- Ids in the module plan are resolved relative to this namespace. -/
   «namespace» : Option Name := none
   /-- What the module is for, until it exists and has a doc comment. -/
   desc : Option String := none
   nodes : Array Node := #[]
+  /-- The module plan's file. -/
   path : System.FilePath := ""
   deriving Inhabited
 
-/-- The module a group name is the plan for: `Numbers.Odd` for `Numbers/Odd`. -/
-def groupModule (name : String) : Name :=
-  (name.splitOn "/").foldl (fun n c => Name.str n c) Name.anonymous
+/-- The module name a module plan's file stands for, from the file's path components under the
+plan directory without `.toml`: `Numbers.Odd` for `["Numbers", "Odd"]`. -/
+def planModuleName (components : List String) : Name :=
+  components.foldl Name.str .anonymous
 
-/-- The group name a module's plan has: `Numbers/Odd` for `Numbers.Odd`. -/
-def moduleGroup : Name → String
-  | .str p s => let q := moduleGroup p; if q.isEmpty then s else q ++ "/" ++ s
-  | .num p n => let q := moduleGroup p; if q.isEmpty then toString n else q ++ "/" ++ toString n
-  | .anonymous => ""
-
-/-- The module a group is the plan for: `Numbers.Odd` for `Numbers/Odd`. -/
-def Group.module (g : Group) : Name := groupModule g.name
-
-/-- All groups, with indexes. `errors` collects everything that went wrong while loading. -/
+/-- Every module plan, with indexes. `errors` collects everything that went wrong while loading. -/
 structure Plan where
-  groups : Array Group := #[]
+  modules : Array ModulePlan := #[]
+  /-- The planned nodes by id. -/
   nodes : Std.HashMap Name Node := {}
-  groupIdx : Std.HashMap String Nat := {}
+  /-- The index in `modules` of each module plan, by module name. -/
+  moduleIdx : Std.HashMap Name Nat := {}
   errors : Array String := #[]
-  /-- A hash of every group file's name and content, by which a cache knows it is stale. -/
+  /-- A hash of every module plan's file path and content, by which a cache knows it is stale. -/
   hash : String := ""
 
-def Plan.group? (p : Plan) (name : String) : Option Group :=
-  p.groupIdx[name]? >>= fun i => p.groups[i]?
+/-- The plan of a module, by module name, if it has one. -/
+def Plan.modulePlan? (p : Plan) (m : Name) : Option ModulePlan :=
+  p.moduleIdx[m]? >>= fun i => p.modules[i]?
 
 def Plan.node? (p : Plan) (id : Name) : Option Node := p.nodes[id]?
 
-/-- The last component of a group name: `odd` for `numbers/odd`. -/
-def groupStem (name : String) : String := (name.splitOn "/").getLastD name
-
-/-- The name of the directory a group file sits in: `numbers` for `numbers/odd`, none at the top. -/
-def groupEnclosing? (name : String) : Option String :=
-  match (name.splitOn "/").dropLast with
-  | [] => none
-  | parts => some (String.intercalate "/" parts)
-
-/-- The group whose directory holds `name`, when its file exists: `numbers` for `numbers/odd`. -/
-def Plan.parent? (p : Plan) (name : String) : Option String :=
-  (groupEnclosing? name).filter p.groupIdx.contains
-
-/-- The state of a node, derived from the compiled library except for `wrong`. -/
+/-- The state of a planned node or a declaration, derived from the compiled library except for
+`wrong`. -/
 inductive NodeState where
   /-- The id does not resolve; the node is a plan. -/
   | «open»
@@ -163,10 +152,16 @@ def rank : NodeState → Nat
 
 end NodeState
 
-/-- What `tracker check` learned about one id. -/
+/--
+What `tracker check` learned about one id: a declaration of the project, or a planned node's id
+(which then may not resolve, or may resolve outside the project).
+-/
 structure DeclInfo where
   id : Name
+  /-- Whether it is one of the project's declarations, and not only a planned node's id. -/
+  declaration : Bool := false
   found : Bool := false
+  /-- The module name of the module the declaration is in. -/
   module : Option Name := none
   line : Option Nat := none
   isTheorem : Bool := false
@@ -174,8 +169,12 @@ structure DeclInfo where
   hasSorry : Bool := false
   axioms : Array Name := #[]
   axiomsOk : Bool := false
-  /-- Tracked ids reachable from the declaration through untracked project constants. -/
+  /-- Planned nodes reachable from the declaration through unplanned constants of the project:
+  its real dependencies, when it is a planned node. -/
   uses : Array Name := #[]
+  /-- Declarations and planned nodes reachable from the declaration through the other constants
+  of the project, as indexes into `Cache.decls`. -/
+  refs : Array Nat := #[]
   signature : String := ""
   /-- The declaration's doc comment, which supersedes the plan's `desc`. -/
   doc : Option String := none
@@ -193,7 +192,7 @@ structure Regression where
   deriving ToJson, FromJson, Inhabited
 
 /-- Bumped whenever the cache's meaning changes; a cache of another version is stale. -/
-def cacheVersion : Nat := 3
+def cacheVersion : Nat := 4
 
 /-- One compiled module of the project, fingerprinted at check time. -/
 structure ModuleRec where
@@ -202,7 +201,7 @@ structure ModuleRec where
   olean : String
   /-- Its fingerprint: Lake's `.olean.hash` beside it, else a hash of the file. -/
   hash : String
-  /-- The first `/-! … -/` block of the module, which supersedes the group's `desc`. -/
+  /-- The first `/-! … -/` block of the module, which supersedes the module plan's `desc`. -/
   doc : Option String := none
   deriving ToJson, FromJson, Inhabited
 
@@ -214,7 +213,9 @@ structure Cache where
   /-- `Plan.hash` of the plan the check ran against. -/
   planHash : String := ""
   modules : Array ModuleRec := #[]
+  /-- Every declaration of the project, and every planned node's id, sorted by id. -/
   decls : Array DeclInfo := #[]
+  /-- The state of every planned node. -/
   states : Array StateRec := #[]
   regressions : Array Regression := #[]
   deriving ToJson, FromJson, Inhabited

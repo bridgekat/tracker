@@ -4,5 +4,4 @@ import Tracker.Plan
 import Tracker.Graph
 import Tracker.Cache
 import Tracker.Check
-import Tracker.Init
 import Tracker.Commands

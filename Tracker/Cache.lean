@@ -5,7 +5,7 @@ import Tracker.Types
 
 A check writes `.lake/tracker/check.json` under the project root; every command reads it, after
 making sure it is fresh. It is never committed. Freshness is judged by content hashes alone, of
-the plan files, of the project's oleans, and of the check's inputs; never by timestamps.
+the module plans, of the project's oleans, and of the check's inputs; never by timestamps.
 -/
 
 open Lean

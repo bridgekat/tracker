@@ -4,9 +4,11 @@ import Tracker.Toml
 /-!
 # Loading the plan
 
-Read every `*.toml` file under the plan directory as a group named by its path there,
-resolve node ids and suggested dependencies, and index everything. Errors are collected, not
-thrown, so that one bad file does not hide the others.
+Read every `*.toml` file under the plan directory as a module plan, of the module whose source
+file sits at the same path under the project root (`Numbers/Odd.toml` plans the module named
+`Numbers.Odd`), resolve planned node ids and suggested dependencies, and index everything. Errors
+are collected, not thrown, so that one bad file does not hide the others. No plan directory is an
+empty plan.
 -/
 
 open Lean
@@ -28,7 +30,7 @@ def depCandidates (ns : Option Name) (raw : String) : List Name :=
     | none => [raw.toName]
 
 open Toml in
-private def decodeNode (group : String) (ns : Option Name) (ictx : Parser.InputContext)
+private def decodeNode (module : Name) (ns : Option Name) (ictx : Parser.InputContext)
     (nt : Lake.Toml.Table) (ref : Syntax) : Lake.Toml.EDecodeM Node := do
   let rawId ← str nt `id ref
   unknownKeys nt [`id, `kind, `desc, `description, `deps, `source, `wrong, `deprecated]
@@ -46,14 +48,14 @@ private def decodeNode (group : String) (ns : Option Name) (ictx : Parser.InputC
   let wrong ← str? nt `wrong
   let deprecated ← str? nt `deprecated
   return {
-    id := resolveId ns rawId, kind, desc, source, wrong, deprecated, group := group,
+    id := resolveId ns rawId, kind, desc, source, wrong, deprecated, module,
     line := lineOf ictx ref, rawId, rawDeps }
 
 open Toml in
-private def decodeGroup (name : String) (path : System.FilePath) (ictx : Parser.InputContext)
-    (t : Lake.Toml.Table) : Lake.Toml.EDecodeM Group := do
+private def decodeModulePlan (module : Name) (path : System.FilePath)
+    (ictx : Parser.InputContext) (t : Lake.Toml.Table) : Lake.Toml.EDecodeM ModulePlan := do
   unknownKeys t [`namespace, `desc, `description, `node]
-    "a group file has namespace, desc and [[node]] tables"
+    "a module plan has namespace, desc and [[node]] tables"
   let ns ← name? t `namespace
   let desc ← match ← str? t `desc with
     | some d => pure (some d)
@@ -61,99 +63,85 @@ private def decodeGroup (name : String) (path : System.FilePath) (ictx : Parser.
   let mut nodes : Array Node := #[]
   -- one bad node does not hide the others: errors accumulate, decoding goes on
   for (nt, ref) in ← tables t `node do
-    if let some n ← recover (decodeNode name ns ictx nt ref) then
+    if let some n ← recover (decodeNode module ns ictx nt ref) then
       nodes := nodes.push n
-  return { name, «namespace» := ns, desc, nodes, path }
+  return { module, «namespace» := ns, desc, nodes, path }
 
-/-- Load one group file: its errors, and the group if it could be decoded at all. -/
-def loadGroup (name : String) (path : System.FilePath) : IO (Array String × Option Group) := do
+/-- Load one module plan: its errors, and the module plan if it could be decoded at all. -/
+def loadModulePlan (module : Name) (path : System.FilePath) :
+    IO (Array String × Option ModulePlan) := do
   match ← Toml.load path with
   | .error e => return (#[s!"{path}:{e}"], none)
   | .ok l =>
-    let (errs, g?) := Toml.run l.ictx (decodeGroup name path l.ictx l.table)
-    return (errs.map fun e => s!"{path}:{e}", g?)
+    let (errs, mp?) := Toml.run l.ictx (decodeModulePlan module path l.ictx l.table)
+    return (errs.map fun e => s!"{path}:{e}", mp?)
 
 /--
-The group files under `dir` as (name, path): the `.toml` files of a directory, then those of its
-subdirectories, each in sorted order, so that a group comes before its children.
+The module plans under `dir` as (path components under `dir` without `.toml`, file): the `.toml`
+files of a directory, then those of its subdirectories, each in sorted order.
 -/
-partial def groupFiles (dir : System.FilePath) (base : String := "") :
-    IO (Array (String × System.FilePath)) := do
+partial def planFiles (dir : System.FilePath) (above : List String := []) :
+    IO (Array (List String × System.FilePath)) := do
   let entries := (← dir.readDir).qsort (·.fileName < ·.fileName)
   let mut out := #[]
   for e in entries do
     if e.path.extension == some "toml" && !(← e.path.isDir) then
-      out := out.push (base ++ e.path.fileStem.getD e.fileName, e.path)
+      out := out.push (above ++ [e.path.fileStem.getD e.fileName], e.path)
   for e in entries do
     if ← e.path.isDir then
-      out := out ++ (← groupFiles e.path (base ++ e.fileName ++ "/"))
+      out := out ++ (← planFiles e.path (above ++ [e.fileName]))
   return out
 
-/-- Load every group under a directory and resolve dependencies. -/
+/-- Load every module plan under a directory and resolve dependencies. -/
 def loadPlan (dir : System.FilePath) : IO Plan := do
-  unless ← dir.isDir do
-    throw <| IO.userError s!"no plan directory at {dir}"
+  unless ← dir.isDir do return { hash := hex 0 }
   let mut plan : Plan := {}
   let mut h : UInt64 := 0
-  for (name, f) in ← groupFiles dir do
-    h := mixHash h (mixHash name.hash (← IO.FS.readFile f).hash)
-    let (errs, g?) ← loadGroup name f
+  for (components, f) in ← planFiles dir do
+    h := mixHash h (mixHash (hash components) (← IO.FS.readFile f).hash)
+    let (errs, mp?) ← loadModulePlan (planModuleName components) f
     plan := { plan with errors := plan.errors ++ errs }
-    if let some g := g? then
+    if let some mp := mp? then
       plan := { plan with
-        groupIdx := plan.groupIdx.insert g.name plan.groups.size
-        groups := plan.groups.push g }
-  -- index nodes, catching duplicate ids
-  for g in plan.groups do
-    for n in g.nodes do
+        moduleIdx := plan.moduleIdx.insert mp.module plan.modules.size
+        modules := plan.modules.push mp }
+  -- index planned nodes, catching duplicate ids
+  for mp in plan.modules do
+    for n in mp.nodes do
       match plan.nodes[n.id]? with
       | some other =>
-        let m := s!"{g.path}:{n.line}: duplicate id {n.id}, also in group {other.group}"
+        let m := s!"{mp.path}:{n.line}: duplicate id {n.id}, also planned in {other.module}"
         plan := { plan with errors := plan.errors.push m }
       | none => plan := { plan with nodes := plan.nodes.insert n.id n }
   -- resolve suggested dependencies
-  let mut groups := #[]
-  for g in plan.groups do
+  let mut modules := #[]
+  for mp in plan.modules do
     let mut nodes := #[]
-    for n in g.nodes do
+    for n in mp.nodes do
       let mut deps := #[]
       for raw in n.rawDeps do
-        match (depCandidates g.namespace raw).find? plan.nodes.contains with
+        match (depCandidates mp.namespace raw).find? plan.nodes.contains with
         | some d =>
           if d == n.id then
-            let m := s!"{g.path}:{n.line}: {n.id} depends on itself"
+            let m := s!"{mp.path}:{n.line}: {n.id} depends on itself"
             plan := { plan with errors := plan.errors.push m }
           else deps := deps.push d
         | none =>
-          let m := s!"{g.path}:{n.line}: unknown dependency '{raw}' of {n.id}"
+          let m := s!"{mp.path}:{n.line}: unknown dependency '{raw}' of {n.id}"
           plan := { plan with errors := plan.errors.push m }
       nodes := nodes.push { n with deps }
-    groups := groups.push { g with nodes }
-  plan := { plan with groups }
+    modules := modules.push { mp with nodes }
+  plan := { plan with modules }
   -- re-index with resolved deps
   let mut nodeMap : Std.HashMap Name Node := {}
-  for g in plan.groups do
-    for n in g.nodes do
+  for mp in plan.modules do
+    for n in mp.nodes do
       if !nodeMap.contains n.id then nodeMap := nodeMap.insert n.id n
-  plan := { plan with nodes := nodeMap }
-  -- a directory holds the children of the group file beside it, which must exist
-  let mut missing : Array String := #[]
-  for g in plan.groups do
-    let mut above := groupEnclosing? g.name
-    while true do
-      match above with
-      | none => break
-      | some p =>
-        if !plan.groupIdx.contains p && !missing.contains p then missing := missing.push p
-        above := groupEnclosing? p
-  for p in missing.qsort (· < ·) do
-    let m := s!"{dir / System.FilePath.mk p}: directory has no group file {p}.toml beside it"
-    plan := { plan with errors := plan.errors.push m }
-  return { plan with hash := hex h }
+  return { plan with nodes := nodeMap, hash := hex h }
 
-/-- Display an id relative to its group's namespace. -/
+/-- Display a planned node's id relative to its module plan's namespace. -/
 def Plan.shortId (p : Plan) (n : Node) : String :=
-  match p.group? n.group >>= (·.namespace) with
+  match p.modulePlan? n.module >>= (·.namespace) with
   | some ns => if ns.isPrefixOf n.id then (n.id.replacePrefix ns .anonymous).toString else n.id.toString
   | none => n.id.toString
 

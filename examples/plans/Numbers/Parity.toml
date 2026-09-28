@@ -1,5 +1,5 @@
 # Finished: kinds, doc comments and real dependencies are read from the library, so the nodes
-# keep only their id, and the module's doc comment describes the group. One declaration has no
+# keep only their id, and the module's doc comment describes the module. One declaration has no
 # doc comment and keeps its description.
 namespace = "Numbers"
 

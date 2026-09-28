@@ -22,11 +22,15 @@ theorem isOdd_one : IsOdd 1 := ⟨0, rfl⟩
 -- No doc comment on purpose: the plan keeps this node's `desc`.
 theorem isEven_two_mul (k : Nat) : IsEven (2 * k) := ⟨k, rfl⟩
 
+/-- Doubling distributes over a sum. No plan names this helper; it is a declaration all the same,
+so `status` counts it and `graph --all` draws it. -/
+theorem two_mul_add_two_mul (a b : Nat) : 2 * a + 2 * b = 2 * (a + b) := by omega
+
 /-- The sum of two even numbers is even. -/
 theorem IsEven.add {m n : Nat} (hm : IsEven m) (hn : IsEven n) : IsEven (m + n) := by
-  obtain ⟨a, ha⟩ := hm
-  obtain ⟨b, hb⟩ := hn
-  exact ⟨a + b, by omega⟩
+  obtain ⟨a, rfl⟩ := hm
+  obtain ⟨b, rfl⟩ := hn
+  exact ⟨a + b, two_mul_add_two_mul a b⟩
 
 /-- An even number plus one is odd. -/
 theorem IsEven.add_one_odd {n : Nat} (h : IsEven n) : IsOdd (n + 1) := by

@@ -36,24 +36,28 @@ tracker — progress tracker for Lean formalization projects
 
 usage: tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <command> [args]
 
-  init                              write a first plan from the project's own declarations
   check [--force]                   make the cache fresh: import the project, resolve every id
-  status [group] [--json]           counts per group, rolled up through parents; regressions
-  ready [--json]                    groups whose outside dependencies are all proved
-  show <group|id>                   the brief for a group, or everything about one node
+  status [module] [--json]          counts per module, rolled up the module tree; regressions
+  ready [--json]                    modules whose outside dependencies are all proved
+  show <module | id>                a module's brief, or everything about one planned node or
+                                    declaration
   lint                              plan errors, cycles, mismatches, deprecations
-  graph [--under G] [--dot]         the graph as JSON (default) or Graphviz DOT
+  graph [--under M] [--all] [--dot] the planned nodes (with --all, every declaration) as JSON or
+                                    Graphviz DOT
 
-Every command but `init` checks first when the cache is stale, that is when the plan, the
-project's oleans, the root modules or the options changed since it was written.
+Modules are named by module name (Numbers.Odd), planned nodes and declarations by id
+(Numbers.IsOdd.add_odd); either may be shortened to an unambiguous trailing part.
+
+Every command checks first when the cache is stale, that is when the module plans, the project's
+oleans, the root modules or the options changed since it was written.
 
   --root DIR   project root (default: current directory)
-  --dir DIR    directory of group files (default: <root>/plans)
+  --dir DIR    directory of module plans (default: <root>/plans)
   --roots A,B  root modules to import (default: lean_lib names in lakefile.toml, else the cache's)
   --no-exts    skip the imported modules' initializers; printed signatures lose their notation
   --no-check   answer from the cache as it is, even if stale"
 
-def commands : List String := ["init", "check", "status", "ready", "show", "lint", "graph"]
+def commands : List String := ["check", "status", "ready", "show", "lint", "graph"]
 
 /-- Root modules from the project's `lakefile.toml`. -/
 def rootsFromLakefile (root : System.FilePath) : IO (Array Name) := do
@@ -121,15 +125,13 @@ unsafe def run (a : Args) : IO UInt32 := do
     IO.println usage
     return 2
   if cmd == "show" && a.positional[1]?.isNone then
-    IO.eprintln "show: give a group name or a node id"; return 2
+    IO.eprintln "show: give a module name or an id"; return 2
   let previous ← readCache root
   let roots ← match a.flags.get? "roots" with
     | some r => pure (r.splitOn "," |>.filter (!·.isEmpty) |>.map String.toName |>.toArray)
     | none => rootsFromLakefile root
   let roots := if roots.isEmpty then (previous.map (·.roots)).getD #[] else roots
   let loadExts := !a.flags.contains "no-exts"
-  -- `init` is the one command that runs without a plan: it is the one that writes it
-  if cmd == "init" then return ← initPlan root dir roots loadExts
   let plan ← loadPlan dir
   let (cache?, ran) ← match ← freshCache root plan previous roots loadExts (cmd == "check")
       (a.flags.contains "force") (a.flags.contains "no-check") with
@@ -140,8 +142,11 @@ unsafe def run (a : Args) : IO UInt32 := do
   | "check" =>
     let some cache := cache? | IO.eprintln "no cache"; return 1
     let c := v.totals
+    let d := v.declTotals
     let tail := if ran then s!"cache written to {cachePath root}" else "cache is fresh (--force checks anyway)"
-    IO.println s!"{c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms; {tail}"
+    IO.println s!"planned nodes: {c.proved} proved, {c.stated} stated, {c.open} open, {c.wrong} wrong, {c.axioms} axioms"
+    IO.println (declSummary d)
+    IO.println tail
     if ran && !cache.regressions.isEmpty then
       IO.println "regressed since the previous check:"
       for r in cache.regressions do IO.println s!"  {r.id}: {r.before} → {r.after}"
@@ -152,7 +157,7 @@ unsafe def run (a : Args) : IO UInt32 := do
     let some target := a.positional[1]? | return 2
     «show» v target
   | "lint" => lint v
-  | "graph" => graph v (a.flags.get? "under") (a.flags.contains "dot")
+  | "graph" => graph v (a.flags.get? "under") (a.flags.contains "all") (a.flags.contains "dot")
   | _ => return 2
 
 unsafe def main (argv : List String) : IO UInt32 := do
