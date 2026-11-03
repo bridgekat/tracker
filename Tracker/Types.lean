@@ -203,6 +203,12 @@ structure CacheEntry where
   signature : String := ""
   /-- The doc comment, which supersedes a planned declaration's `desc`. -/
   doc : Option String := none
+  /-- Lines of source text, from the first line of the declaration to its last. -/
+  lines : Option Nat := none
+  /-- Characters (Unicode code points) of source text. -/
+  chars : Option Nat := none
+  /-- Nodes of the compiled terms, as a DAG: see `Tracker.termSize`. -/
+  size : Option Nat := none
   deriving Inhabited
 
 namespace CacheEntry
@@ -225,7 +231,8 @@ instance : ToJson CacheEntry where
     ("module", e.module.map toJson), ("line", e.line.map toJson),
     ("axioms", (nonEmpty? e.axioms).map toJson), ("refs", (nonEmpty? e.refs).map toJson),
     ("signature", if e.signature.isEmpty then none else some (toJson e.signature)),
-    ("doc", e.doc.map toJson)]
+    ("doc", e.doc.map toJson), ("lines", e.lines.map toJson), ("chars", e.chars.map toJson),
+    ("size", e.size.map toJson)]
 
 instance : FromJson CacheEntry where
   fromJson? j := do
@@ -243,7 +250,8 @@ instance : FromJson CacheEntry where
       declaration := (← opt "declaration").getD true
       kind, module := ← opt "module", line := ← opt "line"
       axioms := (← opt "axioms").getD #[], refs := (← opt "refs").getD #[]
-      signature := (← opt "signature").getD "", doc := ← opt "doc" }
+      signature := (← opt "signature").getD "", doc := ← opt "doc"
+      lines := ← opt "lines", chars := ← opt "chars", size := ← opt "size" }
 
 end CacheEntry
 
@@ -254,7 +262,7 @@ structure Regression where
   deriving ToJson, FromJson, Inhabited
 
 /-- Bumped whenever the cache's meaning changes; a cache of another version is stale. -/
-def cacheVersion : Nat := 5
+def cacheVersion : Nat := 6
 
 /-- A module an entry is in. The project's modules are fingerprinted at check time; a module
 outside the project is only named. -/

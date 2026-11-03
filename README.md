@@ -176,7 +176,8 @@ ready [--json]                     modules whose outside dependencies are all pr
 show <module | id>                 a module's brief, or everything about one declaration
 lint                               plan errors, cycles, mismatches, deprecations, superseded fields
 graph [--under M] [--all] [--dot]  the dependency graph of the planned declarations (with --all,
-                                   of every declaration) as JSON or Graphviz DOT
+      [--metrics[=lines,chars,size]] of every declaration) as JSON or Graphviz DOT, optionally
+                                   with each declaration's size
 ```
 
 | option | meaning |
@@ -246,6 +247,16 @@ default — `false`, empty, or absent — is left out.
   directly, planned or not, passing only through the constants that are neither (auxiliary and
   private ones); the planned-level ones follow from these by the same rule.
 - `desc` is the description in force: the doc comment, else the plan's `desc`.
+- `--metrics` adds to each node that is a declaration the metrics named (all three when none is):
+
+  | field | meaning |
+  |---|---|
+  | `lines` | lines of source, doc comment and attributes included |
+  | `chars` | characters (code points) of the same source text |
+  | `size` | nodes of the compiled terms — type and value, and an inductive type's constructors — with each distinct subterm counted once, and the auxiliary constants the elaborator abstracted out of the proof (`_proof_1`, `match_1`) counted as part of it |
+
+  `chars` needs the module's `.lean` source, found on `LEAN_SRC_PATH` (set by `lake env` and
+  `lake exe`), else under the working directory; it is absent without one. Metrics are JSON only.
 - The DOT form has one cluster per module, nodes filled by state (unplanned declarations as small
   ellipses), real dependencies as solid edges, suggested ones dashed:
 
@@ -257,8 +268,8 @@ lake exe tracker graph --dot --under Numbers | dot -Tsvg -o numbers.svg
 
 A check writes `<root>/.lake/tracker/check.json`, which is never committed. It records the
 compiled library and nothing the plan says: every declaration, and every id the plan named when the
-check ran, with kind, module, location, signature, doc comment, nonstandard axioms, and the
-entries each refers to.
+check ran, with kind, module, location, signature, doc comment, nonstandard axioms, the
+entries each refers to, and for declarations the metrics `graph --metrics` reports.
 
 - **Freshness.** Every command refreshes the cache first when it is stale: when the compiled
   modules, the root modules, the options or the cache format changed, or the plan names an id the

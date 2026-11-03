@@ -389,11 +389,17 @@ node — and its suggested ones, if it is a planned declaration. -/
 private def graphDeps (v : View) (all : Bool) (id : Name) : Array Name × Array Name :=
   (if all then v.refsOf id else v.realDeps id, ((v.plan.node? id).map (·.deps)).getD #[])
 
+/-- The metrics `graph --metrics` can add to each node, as the cache records them. -/
+def graphMetrics : List (String × (CacheEntry → Option Nat)) :=
+  [("lines", (·.lines)), ("chars", (·.chars)), ("size", (·.size))]
+
 /--
 The graph as one JSON object of two tables, `modules` and `nodes`, which refer to each other and
-to themselves by index. A field at its default (false, empty, absent) is left out.
+to themselves by index. A field at its default (false, empty, absent) is left out. Each of
+`metrics`, named as in `graphMetrics`, is added to the nodes that are declarations.
 -/
-def graphJson (v : View) (under? : Option Name) (all : Bool) : Json := Id.run do
+def graphJson (v : View) (under? : Option Name) (all : Bool) (metrics : List String := []) :
+    Json := Id.run do
   let (modules, ids) := graphScope v under? all
   let moduleIdx : Std.HashMap Name Nat := modules.foldl (init := {}) fun m n => m.insert n m.size
   let nodeIdx : Std.HashMap Name Nat := ids.foldl (init := {}) fun m n => m.insert n m.size
@@ -410,14 +416,18 @@ def graphJson (v : View) (under? : Option Name) (all : Bool) : Json := Id.run do
   let nodeJson := ids.map fun id =>
     let n? := v.plan.node? id
     let (real, sugg) := graphDeps v all id
-    objOmitting [
+    let decl? := (v.entry? id).filter CacheEntry.declaration
+    let metricFields : List (String × Option Json) :=
+      graphMetrics.filterMap fun ((k, f) : String × (CacheEntry → Option Nat)) =>
+        if metrics.contains k then some (k, (decl? >>= f).map toJson) else none
+    objOmitting <| [
       ("id", some (toJson id.toString)),
       ("module", (v.moduleOf? id >>= (moduleIdx[·]?)).map toJson),
       ("planned", flag n?.isSome), ("kind", (v.kindOf? id).map toJson),
       ("state", some (toJson (v.state id).toString)), ("desc", text (v.descOf id)),
       ("source", (n?.bind (·.source)).map toJson), ("wrong", (n?.bind (·.wrong)).map toJson),
       ("deprecated", (n?.bind (·.deprecated)).map toJson),
-      ("deps", indexes real), ("suggested", indexes sugg)]
+      ("deps", indexes real), ("suggested", indexes sugg)] ++ metricFields
   return Json.mkObj [("modules", toJson moduleJson), ("nodes", toJson nodeJson)]
 
 private def dotEscape (s : String) : String :=
@@ -451,13 +461,25 @@ def graphDot (v : View) (under? : Option Name) (all : Bool) : String := Id.run d
   out := out ++ "}\n"
   return out
 
-def graph (v : View) (under? : Option String) (all dot : Bool) : IO UInt32 := do
+/-- `metrics?` is the value of `--metrics`: absent, empty for every metric, or a comma-separated
+list of them. -/
+def graph (v : View) (under? : Option String) (all dot : Bool) (metrics? : Option String) :
+    IO UInt32 := do
   let mut under : Option Name := none
   if let some m := under? then
     let some r ← resolveModule v m | return 1
     under := some r
+  let known := graphMetrics.map (·.1)
+  let metrics := match metrics? with
+    | none => []
+    | some "" => known
+    | some s => s.splitOn "," |>.filter (!·.isEmpty)
+  if let some bad := metrics.find? (!known.contains ·) then
+    IO.eprintln s!"graph: unknown metric '{bad}' (known: {", ".intercalate known})"; return 2
+  if dot && !metrics.isEmpty then
+    IO.eprintln "graph: --metrics is for the JSON form, not --dot"; return 2
   if dot then IO.print (graphDot v under all)
-  else IO.println (graphJson v under all).compress
+  else IO.println (graphJson v under all metrics).compress
   return 0
 
 end Tracker

@@ -202,12 +202,78 @@ def reach (r : Reach) (cl : Closure) (start : Name) : IO (Array Name) := do
 
 end Reach
 
+/-- The terms of a constant: its type and value, and for an inductive type its constructors'
+types. -/
+private def termsOf (env : Environment) (ci : ConstantInfo) : Array Expr :=
+  match ci with
+  | .inductInfo val => val.ctors.foldl (init := #[ci.type]) fun a c =>
+    match env.find? c with
+    | some ctor => a.push ctor.type
+    | none => a
+  | _ => #[ci.type] ++ (ci.value? (allowOpaque := true)).toList
+
 /--
-Resolve one id: what it is, where, what it rests on, and the entries it refers to through the
-other constants of the project, as ids. Runs in `CoreM` for ranges and pretty printing.
+The size of a declaration's compiled terms: the number of distinct subterms of its terms
+(`termsOf`), each counted once however often it occurs, so the size of the DAG the kernel checks
+rather than of its unfolding, which can be astronomical. The auxiliary constants the elaborator
+abstracted out of it (`foo._proof_1`, `foo.match_1`) are counted as part of it.
 -/
-def resolveEntry (r : Reach) (all : Closure) (declaration : Bool) (id : Name) :
-    CoreM (CacheEntry × Option Name × Array Name) := do
+partial def termSize (env : Environment) (id : Name) : Nat := Id.run do
+  let some ci := env.find? id | return 0
+  let mut seen : Std.HashSet Expr := {}
+  let mut done : Std.HashSet Name := ({} : Std.HashSet Name).insert id
+  let mut todo : Array Expr := termsOf env ci
+  while true do
+    let some e := todo.back? | break
+    todo := todo.pop
+    if seen.contains e then continue
+    seen := seen.insert e
+    match e with
+    | .app f a => todo := todo.push a |>.push f
+    | .lam _ t b _ | .forallE _ t b _ => todo := todo.push b |>.push t
+    | .letE _ t v b _ => todo := todo.push b |>.push v |>.push t
+    | .mdata _ b | .proj _ _ b => todo := todo.push b
+    | .const c _ =>
+      if !done.contains c && c.isInternalDetail && id.isPrefixOf c then
+        done := done.insert c
+        if let some aux := env.find? c then todo := todo ++ termsOf env aux
+    | _ => pure ()
+  return seen.size
+
+/-- The code point offset at which each line of a text starts: line `n` (from 1) at index `n`. -/
+def lineStarts (text : String) : Array Nat := Id.run do
+  let mut out := #[0, 0]
+  let mut i := 0
+  for c in text.toList do
+    i := i + 1
+    if c == '\n' then out := out.push i
+  return out
+
+/-- The source of a module, as `lineStarts`: found on `LEAN_SRC_PATH`, which `lake env` sets,
+else under the working directory. None when there is no source. -/
+def sourceLines (sp : SearchPath) (m : Name) : IO (Option (Array Nat)) := do
+  let p ← match ← sp.findWithExt "lean" m with
+    | some p => pure p
+    | none => pure (modToFilePath "." m "lean")
+  unless ← p.pathExists do return none
+  return some (lineStarts (← IO.FS.readFile p))
+
+/-- Lines and characters of the source text a declaration range spans. -/
+def rangeMetrics (starts : Option (Array Nat)) (r : DeclarationRange) : Nat × Option Nat :=
+  let lines := r.endPos.line - r.pos.line + 1
+  let chars := starts.bind fun s => do
+    let a ← s[r.pos.line]?
+    let b ← s[r.endPos.line]?
+    return (b + r.endPos.column) - (a + r.pos.column)
+  (lines, chars)
+
+/--
+Resolve one id: what it is, where, what it rests on, how large it is, and the entries it refers
+to through the other constants of the project, as ids. `sources` holds the `lineStarts` of the
+project's modules. Runs in `CoreM` for ranges and pretty printing.
+-/
+def resolveEntry (r : Reach) (all : Closure) (sources : Std.HashMap Name (Array Nat))
+    (declaration : Bool) (id : Name) : CoreM (CacheEntry × Option Name × Array Name) := do
   let env ← getEnv
   match env.find? id with
   | none => return ({ id, declaration }, none, #[])
@@ -219,13 +285,18 @@ def resolveEntry (r : Reach) (all : Closure) (declaration : Bool) (id : Name) :
         pure (f.fmt.pretty 100)
       catch _ => pure ""
     let kind : DeclKind := if ci.isTheorem then .theorem else if ci.isAxiom then .axiom else .definition
+    let module := r.moduleOf id
+    let (lines, chars) := match range, declaration with
+      | some rs, true => let (l, c) := rangeMetrics (module >>= (sources[·]?)) rs.range; (some l, c)
+      | _, _ => (none, none)
     let entry : CacheEntry := {
       id, declaration, kind
       line := range.map (·.range.pos.line)
       axioms := if axioms.all standardAxioms.contains then #[] else axioms
       signature := sig
-      doc := (← findDocString? env id).map trim }
-    return (entry, r.moduleOf id, ← r.reach all id)
+      doc := (← findDocString? env id).map trim
+      lines, chars, size := if declaration then some (termSize env id) else none }
+    return (entry, module, ← r.reach all id)
 
 /-- Import the project's root modules, running their initializers unless `loadExts` is false. -/
 unsafe def importProject (roots : Array Name) (loadExts : Bool) : IO Environment := do
@@ -282,7 +353,10 @@ def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
   -- changed, and with the first `/-! … -/` block as the module's description; then any other
   -- module an entry is in, by name only
   let mut modules : Array ModuleRec := #[]
+  let sp ← getSrcSearchPath
+  let mut sources : Std.HashMap Name (Array Nat) := {}
   for m in projectModules do
+    if let some s ← sourceLines sp m then sources := sources.insert m s
     let olean ← findOLean m
     let doc := (getModuleDoc? env m).bind fun ds => ds[0]?.map fun d => trim d.doc
     modules := modules.push {
@@ -291,7 +365,7 @@ def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
     modules.foldl (init := {}) fun m rec => m.insert rec.name m.size
   let mut entries : Array CacheEntry := #[]
   for id in ids do
-    let (e, m?, refs) ← runCore env (resolveEntry r all (declSet.contains id) id) id.getPrefix
+    let (e, m?, refs) ← runCore env (resolveEntry r all sources (declSet.contains id) id) id.getPrefix
     let mut module := none
     if let some m := m? then
       unless moduleIdx.contains m do

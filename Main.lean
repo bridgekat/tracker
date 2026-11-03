@@ -42,7 +42,9 @@ usage: tracker [--root DIR] [--dir DIR] [--roots A,B] [--no-exts] [--no-check] <
   show <module | id>                a module's brief, or everything about one declaration
   lint                              plan errors, cycles, mismatches, deprecations, superseded fields
   graph [--under M] [--all] [--dot] the dependency graph of the planned declarations (with --all,
-                                    of every declaration) as JSON or Graphviz DOT
+        [--metrics[=lines,chars,size]]  of every declaration) as JSON or Graphviz DOT; --metrics
+                                    adds each declaration's source lines and characters and the
+                                    size of its compiled terms to the JSON
 
 Modules are named by module name (Numbers.Odd), declarations by id (Numbers.IsOdd.add_odd);
 either may be shortened to an unambiguous trailing part.
@@ -156,7 +158,9 @@ unsafe def run (a : Args) : IO UInt32 := do
     let some target := a.positional[1]? | return 2
     «show» v target
   | "lint" => lint v
-  | "graph" => graph v (a.flags.get? "under") (a.flags.contains "all") (a.flags.contains "dot")
+  | "graph" =>
+    graph v (a.flags.get? "under") (a.flags.contains "all") (a.flags.contains "dot")
+      (a.flags.get? "metrics")
   | _ => return 2
 
 unsafe def main (argv : List String) : IO UInt32 := do
