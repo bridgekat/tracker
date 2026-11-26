@@ -65,8 +65,8 @@ Why the cache cannot be answered from, empty when it can: compare it with the op
 project's oleans as they are now, and the ids the plan names. An edit that has not been built is
 invisible here, as everywhere in the tracker, which reads oleans and never builds.
 -/
-def staleness (plan : Plan) (cache : Option Cache) (roots : Array Name) (loadExts : Bool) :
-    IO (Array String) := do
+def staleness (plan : Plan) (cache : Option Cache) (roots : Array Name) (loadExts : Bool)
+    (oleanDir : Option System.FilePath := none) : IO (Array String) := do
   let some c := cache | return #["no cache"]
   let mut stale : Array String := #[]
   if c.version != cacheVersion then stale := stale.push "cache format changed"
@@ -78,6 +78,11 @@ def staleness (plan : Plan) (cache : Option Cache) (roots : Array Name) (loadExt
   let mut rebuilt : Array String := #[]
   for m in c.modules do
     let some olean := m.olean | continue
+    if let some dir := oleanDir then
+      let expected := modToFilePath dir m.name "olean"
+      if expected.toString != olean && (← expected.pathExists) then
+        rebuilt := rebuilt.push s!"{m.name} (olean moved)"
+        continue
     match ← oleanFingerprint (System.FilePath.mk olean) with
     | none => rebuilt := rebuilt.push s!"{m.name} (olean missing)"
     | some h => if some h != m.hash then rebuilt := rebuilt.push m.name.toString

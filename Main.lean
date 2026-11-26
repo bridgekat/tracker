@@ -3,7 +3,8 @@ Copyright (c) 2026 Great Bay University. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Tracker
-import Lake.Toml
+import Lake.Load.Package
+import Lake.Config.Module
 
 open Lean Tracker
 
@@ -58,24 +59,29 @@ modules or the options changed since it was written, or the plan names ids it ha
 
   --root DIR   project root (default: current directory)
   --dir DIR    directory of module plans (default: <root>/plans)
-  --roots A,B  root modules to import (default: lean_lib names in lakefile.toml, else the cache's)
+  --roots A,B  root modules to import (default: built Lake library modules, else the cache's)
   --no-exts    skip the imported modules' initializers; printed signatures lose their notation
   --no-check   answer from the cache as it is, even if stale"
 
 def commands : List String := ["check", "status", "ready", "show", "lint", "graph"]
 
-/-- Root modules from the project's `lakefile.toml`. -/
-def rootsFromLakefile (root : System.FilePath) : IO (Array Name) := do
-  let p := root / "lakefile.toml"
-  unless ← p.pathExists do return #[]
-  match ← Tracker.Toml.load p with
-  | .error _ => return #[]
-  | .ok l =>
-    match Tracker.Toml.run l.ictx (do
-        let ts ← Tracker.Toml.tables l.table `lean_lib
-        ts.filterMapM fun (t, _) => Tracker.Toml.name? t `name) with
-    | (_, some names) => return names
-    | _ => return #[]
+/-- Load the project's Lake configuration without resolving dependencies or building modules. -/
+def loadProjectPackage (root : System.FilePath) : IO (Option Lake.Package) := do
+  unless ← Lake.configFileExists (root / Lake.defaultConfigFile) do return none
+  let wsDir ← IO.FS.realPath root
+  let lean ← Lake.LeanInstall.get (← findSysroot) (collocated := true)
+  let lakeEnv ← (Lake.Env.compute (Lake.LakeInstall.ofLean lean) lean (← Lake.findElanInstall?)).adapt
+    IO.userError
+  (Lake.loadPackage { wsDir, lakeEnv }).toBaseIO
+
+/-- Use Lake's library globs, including the default glob for each declared library root. -/
+def builtLibraryModules (pkg : Lake.Package) : IO (Array Name) := do
+  let mut modules : Std.HashSet Name := {}
+  for lib in pkg.leanLibs do
+    for mod in ← lib.getModuleArray do
+      if ← mod.oleanFile.pathExists then
+        modules := modules.insert mod.name
+  return sortNames modules.toArray
 
 /--
 The cache to answer from, and whether a check ran for it. Fresh on disk: that one. Stale, or
@@ -84,9 +90,9 @@ The cache to answer from, and whether a check ran for it. Fresh on disk: that on
 checks.
 -/
 unsafe def freshCache (root : System.FilePath) (plan : Plan) (previous : Option Cache)
-    (roots : Array Name) (loadExts isCheck force useStale : Bool) :
+    (roots : Array Name) (loadExts isCheck force useStale : Bool) (pkg : Option Lake.Package) :
     IO (Except UInt32 (Option Cache × Bool)) := do
-  let stale ← staleness plan previous roots loadExts
+  let stale ← staleness plan previous roots loadExts (pkg.map (·.leanLibDir))
   let mut cache := previous
   let mut ran := false
   let why := ", ".intercalate stale.toList
@@ -96,7 +102,7 @@ unsafe def freshCache (root : System.FilePath) (plan : Plan) (previous : Option 
   else if force || !stale.isEmpty then
     let blocked :=
       if !plan.errors.isEmpty then some "the plan has errors; run `tracker lint`"
-      else if roots.isEmpty then some "no root modules; pass --roots A,B or add a lean_lib to lakefile.toml"
+      else if roots.isEmpty then some "no compiled library modules; run `lake build` or pass --roots A,B"
       else none
     match blocked with
     | some b =>
@@ -109,7 +115,8 @@ unsafe def freshCache (root : System.FilePath) (plan : Plan) (previous : Option 
     | none =>
       IO.eprintln (if force then "checking" else if previous.isNone then "no cache; checking"
         else s!"cache stale ({why}); checking")
-      let c ← runCheck plan roots loadExts previous
+      -- This command imports once, so the environment can live until the process exits.
+      let c ← runCheck plan roots loadExts previous pkg (leakEnv := true)
       writeCache root c
       cache := some c
       ran := true
@@ -132,14 +139,20 @@ unsafe def run (a : Args) : IO UInt32 := do
   if cmd == "show" && a.positional[1]?.isNone then
     IO.eprintln "show: give a module name or an id"; return 2
   let previous ← readCache root
+  let pkg ← loadProjectPackage root
+  let cachedRoots := (previous.map (·.roots)).getD #[]
   let roots ← match a.flags.get? "roots" with
-    | some r => pure (r.splitOn "," |>.filter (!·.isEmpty) |>.map String.toName |>.toArray)
-    | none => rootsFromLakefile root
-  let roots := if roots.isEmpty then (previous.map (·.roots)).getD #[] else roots
+    | some r =>
+      let explicit := r.splitOn "," |>.filter (!·.isEmpty) |>.map String.toName |>.toArray
+      pure (if explicit.isEmpty then cachedRoots else explicit)
+    | none =>
+      match pkg with
+      | some p => if p.leanLibs.isEmpty then pure cachedRoots else builtLibraryModules p
+      | none => pure cachedRoots
   let loadExts := !a.flags.contains "no-exts"
   let plan ← loadPlan dir
   let (cache?, ran) ← match ← freshCache root plan previous roots loadExts (cmd == "check")
-      (a.flags.contains "force") (a.flags.contains "no-check") with
+      (a.flags.contains "force") (a.flags.contains "no-check") pkg with
     | .error code => return code
     | .ok r => pure r
   let v := mkView plan cache?

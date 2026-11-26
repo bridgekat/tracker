@@ -33,6 +33,9 @@ No plan is needed to start: without a plan directory the plan is empty, and `sta
 `graph --all` already describe the library. Add one line to the project's agent instructions: read
 `tools/tracker/README.md` before touching the plan.
 
+The tracker reads `lakefile.toml` or `lakefile.lean` and uses the configured library roots, globs,
+and source and build directories to find modules with compiled `.olean` files.
+
 Alternatives:
 - A `git = "…"` require works too; Lake keeps the clone under `.lake/packages/tracker/`.
 - A clone built anywhere runs from the project root, with no `require`, as
@@ -184,7 +187,7 @@ graph [--under M] [--all] [--dot]  the dependency graph of the planned declarati
 |---|---|
 | `--root DIR` | project root (default `.`) |
 | `--dir DIR` | plan directory (default `<root>/plans`) |
-| `--roots A,B` | root modules to import (default: the `lean_lib`s in `lakefile.toml`, else the cache's) |
+| `--roots A,B` | root modules to import (default: built modules of the project's Lake libraries, or the cache's roots when no library configuration is available) |
 | `--no-exts` | skip the imported modules' initializers; printed signatures lose their notation |
 | `--no-check` | answer from the cache as it is, even if stale |
 

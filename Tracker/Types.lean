@@ -266,7 +266,7 @@ structure Regression where
   deriving ToJson, FromJson, Inhabited
 
 /-- Bumped whenever the cache's meaning changes; a cache of another version is stale. -/
-def cacheVersion : Nat := 6
+def cacheVersion : Nat := 7
 
 /-- A module an entry is in. The project's modules are fingerprinted at check time; a module
 outside the project is only named. -/

@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 import Tracker.Types
 import Tracker.Plan
 import Tracker.Cache
+import Lake.Config.Module
 
 /-!
 # `tracker check`
@@ -253,12 +254,13 @@ def lineStarts (text : String) : Array Nat := Id.run do
     if c == '\n' then out := out.push i
   return out
 
-/-- The source of a module, as `lineStarts`: found on `LEAN_SRC_PATH`, which `lake env` sets,
-else under the working directory. None when there is no source. -/
-def sourceLines (sp : SearchPath) (m : Name) : IO (Option (Array Nat)) := do
-  let p ← match ← sp.findWithExt "lean" m with
-    | some p => pure p
-    | none => pure (modToFilePath "." m "lean")
+/-- Use the local library's source path, then try `LEAN_SRC_PATH` and the working directory. -/
+def sourceLines (sp : SearchPath) (m : Name) (pkg : Option Lake.Package := none) :
+    IO (Option (Array Nat)) := do
+  if let some mod := pkg.bind (·.findModule? m) then
+    if ← mod.leanFile.pathExists then
+      return some (lineStarts (← IO.FS.readFile mod.leanFile))
+  let p := (← sp.findModuleWithExt "lean" m).getD (modToFilePath "." m "lean")
   unless ← p.pathExists do return none
   return some (lineStarts (← IO.FS.readFile p))
 
@@ -284,10 +286,9 @@ def resolveEntry (r : Reach) (all : Closure) (sources : Std.HashMap Name (Array 
   | some ci =>
     let axioms ← r.axiomList (← r.axioms id)
     let range ← findDeclarationRanges? id
-    let sig ← try
-        let f ← MetaM.run' (PrettyPrinter.ppSignature id)
-        pure (f.fmt.pretty 100)
-      catch _ => pure ""
+    let sig ← tryCatchRuntimeEx (Core.withCurrHeartbeats do
+      let f ← MetaM.run' (PrettyPrinter.ppSignature id)
+      pure (f.fmt.pretty 100)) (fun _ => pure "")
     let kind : DeclKind := if ci.isTheorem then .theorem else if ci.isAxiom then .axiom else .definition
     let module := r.moduleOf id
     let (lines, chars) := match range, declaration with
@@ -303,14 +304,16 @@ def resolveEntry (r : Reach) (all : Closure) (sources : Std.HashMap Name (Array 
     return (entry, module, ← r.reach all id)
 
 /-- Import the project's root modules, running their initializers unless `loadExts` is false. -/
-unsafe def importProject (roots : Array Name) (loadExts : Bool) : IO Environment := do
-  initSearchPath (← findSysroot)
+unsafe def importProject (roots : Array Name) (loadExts : Bool)
+    (pkg : Option Lake.Package := none) (leakEnv := false) : IO Environment := do
+  -- Lake's environment can list dependencies first, including another module named `Main`.
+  initSearchPath (← findSysroot) (pkg.toList.map (·.leanLibDir))
   enableInitializersExecution
   let t0 ← IO.monoMsNow
   let env ← importModules (roots.map fun r => { module := r }) {} (trustLevel := 1024)
-    (loadExts := loadExts)
+    (loadExts := loadExts) (leakEnv := leakEnv)
   let t1 ← IO.monoMsNow
-  IO.eprintln s!"imported {roots} in {t1 - t0} ms ({env.header.modules.size} modules)"
+  IO.eprintln s!"imported {roots.size} root modules in {t1 - t0} ms ({env.header.modules.size} total)"
   return env
 
 /-- Run a `CoreM` against an imported environment. -/
@@ -340,7 +343,7 @@ def regressionsSince (plan : Plan) (previous : Option Cache) (entries : Array Ca
 /-- Check the declarations and every planned declaration against an environment the project was
 imported into. -/
 def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
-    (loadExts : Bool) (previous : Option Cache) : IO Cache := do
+    (loadExts : Bool) (previous : Option Cache) (pkg : Option Lake.Package := none) : IO Cache := do
   let t1 ← IO.monoMsNow
   let r ← Reach.init env roots
   let projectModules := sortNames r.projectModules
@@ -360,7 +363,7 @@ def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
   let sp ← getSrcSearchPath
   let mut sources : Std.HashMap Name (Array Nat) := {}
   for m in projectModules do
-    if let some s ← sourceLines sp m then sources := sources.insert m s
+    if let some s ← sourceLines sp m pkg then sources := sources.insert m s
     let olean ← findOLean m
     let doc := (getModuleDoc? env m).bind fun ds => ds[0]?.map fun d => trim d.doc
     modules := modules.push {
@@ -384,7 +387,8 @@ def checkEnv (env : Environment) (plan : Plan) (roots : Array Name)
 
 /-- Import the project and check it. -/
 unsafe def runCheck (plan : Plan) (roots : Array Name)
-    (loadExts : Bool) (previous : Option Cache) : IO Cache := do
-  checkEnv (← importProject roots loadExts) plan roots loadExts previous
+    (loadExts : Bool) (previous : Option Cache) (pkg : Option Lake.Package := none)
+    (leakEnv := false) : IO Cache := do
+  checkEnv (← importProject roots loadExts pkg leakEnv) plan roots loadExts previous pkg
 
 end Tracker
